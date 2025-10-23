@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Studio Advanced Settings Setter (URL-Configurable)
 // @namespace    http://tampermonkey.net/
-// @version      4.1
+// @version      4.2
 // @description  Applies advanced settings to AI Studio from URL parameters or internal defaults.
 // @author       You
 // @match        https://aistudio.google.com/*
@@ -70,7 +70,14 @@
         setupGlobalClickListener();
 
         // Check if settings are already applied by checking temperature
-        const tempSlider = document.querySelector('[data-test-id="temperatureSliderContainer"] input[type="range"]');
+        // Wait a bit for the slider to appear if it doesn't exist yet
+        let tempSlider = document.querySelector('[data-test-id="temperatureSliderContainer"] input[type="range"]');
+        if (!tempSlider) {
+            console.log("[Tampermonkey] Temperature slider not found yet, waiting...");
+            await new Promise(resolve => setTimeout(resolve, 500));
+            tempSlider = document.querySelector('[data-test-id="temperatureSliderContainer"] input[type="range"]');
+        }
+        
         if (tempSlider && parseFloat(tempSlider.value) !== 1) {
             console.log("[Tampermonkey] Settings already applied (temperature is not 1). Skipping settings application.");
             return;
@@ -386,27 +393,50 @@ function setupGlobalClickListener() {
     window.addEventListener('error', (event) => console.error('[Tampermonkey] Uncaught error:', event.error));
     window.addEventListener('unhandledrejection', (event) => console.error('[Tampermonkey] Unhandled promise rejection:', event.reason));
 
+    let lastUrl = location.href;
+    let hasInitialized = false;
+
     // Safari/Userscripts compatibility: Add multiple initialization strategies
     function initializeScript() {
-        console.log("[Tampermonkey] AI Studio Advanced Settings Setter initialized.");
+        console.log("[Tampermonkey] Initializing on URL:", location.href);
         
         // Strategy 1: Wait for the thinking toggle (primary indicator)
         waitForElement('mat-slide-toggle[data-test-toggle="enable-thinking"]', () => {
             console.log("[Tampermonkey] Thinking toggle found, running main logic.");
             runMainLogic();
+            hasInitialized = true;
         }, 20000);
         
         // Strategy 2: Fallback - wait for temperature slider (Safari backup)
         setTimeout(() => {
             const tempSlider = document.querySelector('[data-test-id="temperatureSliderContainer"] input[type="range"]');
-            if (tempSlider && !document.querySelector('mat-slide-toggle[data-test-toggle="enable-thinking"]')) {
+            if (tempSlider && !hasInitialized) {
                 console.log("[Tampermonkey] Using fallback initialization (Safari mode).");
                 runMainLogic();
+                hasInitialized = true;
             }
         }, 3000);
     }
 
-    // Initialize immediately if DOM is ready, otherwise wait
+    // Detect URL changes in SPA (for direct bookmark navigation)
+    const urlObserver = new MutationObserver(() => {
+        const currentUrl = location.href;
+        if (currentUrl !== lastUrl) {
+            console.log("[Tampermonkey] URL changed from", lastUrl, "to", currentUrl);
+            lastUrl = currentUrl;
+            hasInitialized = false;
+            
+            // Give the SPA time to render, then initialize
+            setTimeout(() => {
+                initializeScript();
+            }, 500);
+        }
+    });
+
+    // Start observing URL changes
+    urlObserver.observe(document.documentElement, { childList: true, subtree: true });
+
+    // Initial page load
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initializeScript);
     } else {
