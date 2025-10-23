@@ -73,5 +73,3 @@ build/
 # macOS extended attributes
 *.DS_Store
 
-# User scripts
-*.user.js
