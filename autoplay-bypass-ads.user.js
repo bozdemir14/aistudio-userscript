@@ -8,6 +8,8 @@
 // @include      *://*mactanmaca179.shop/*
 // @grant        none
 // @run-at       document-idle
+// @downloadURL  https://raw.githubusercontent.com/bozdemir14/aistudio-userscript/refs/heads/main/autoplay-bypass-ads.user.js
+// @updateURL    https://raw.githubusercontent.com/bozdemir14/aistudio-userscript/refs/heads/main/autoplay-bypass-ads.user.js
 // ==/UserScript==
 
 (function() {
