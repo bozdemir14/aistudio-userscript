@@ -1,0 +1,77 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Icon must end with two \\r
+Icon\r
+
+# Thumbnails
+._*
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+pnpm-lock.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+venv/
+ENV/
+.env
+
+# VSCode
+.vscode/
+.settings/
+
+# JetBrains
+.idea/
+*.iml
+
+# Logs
+logs/
+*.log
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Misc
+*.swp
+*.swo
+*~
+
+# Build
+dist/
+build/
+
+# Editor backups
+*.bak
+
+# macOS extended attributes
+*.DS_Store
+
+# User scripts
+*.user.js
