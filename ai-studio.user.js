@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         AI Studio Advanced Settings Setter (URL-Configurable)
 // @namespace    http://tampermonkey.net/
-// @version      3.9
+// @version      4.0
 // @description  Applies advanced settings to AI Studio from URL parameters or internal defaults.
 // @author       You
 // @match        https://aistudio.google.com/*
 // @grant        none
 // @run-at       document-idle
-// @downloadURL  https://raw.githubusercontent.com/batuozdemir/browser-scripts/refs/heads/main/ai-studio.user.js
-// @updateURL    https://raw.githubusercontent.com/batuozdemir/browser-scripts/refs/heads/main/ai-studio.user.js
+// @downloadURL  https://raw.githubusercontent.com/bozdemir14/aistudio-userscript/refs/heads/main/ai-studio.user.js
+// @updateURL    https://raw.githubusercontent.com/bozdemir14/aistudio-userscript/refs/heads/main/ai-studio.user.js
 // ==/UserScript==
 
 
@@ -66,6 +66,13 @@
 
     async function runMainLogic() {
         console.log("[Tampermonkey] AI Studio UI is ready. Initializing script.");
+
+        // Check if settings are already applied by checking temperature
+        const tempSlider = document.querySelector('[data-test-id="temperatureSliderContainer"] input[type="range"]');
+        if (tempSlider && parseFloat(tempSlider.value) !== 1) {
+            console.log("[Tampermonkey] Settings already applied (temperature is not 1). Skipping initialization.");
+            return;
+        }
 
 const defaultSettings = {
     model: "gemini-2.5-pro",
@@ -163,7 +170,16 @@ function setupGlobalClickListener() {
 
         // Case 1: User starts a new chat.
         if (target.closest('a[href="/prompts/new_chat"]')) {
-            setTimeout(() => setTemperature(0), 500);
+            setTimeout(() => {
+                // Check if settings need to be applied
+                const tempSlider = document.querySelector('[data-test-id="temperatureSliderContainer"] input[type="range"]');
+                if (tempSlider && parseFloat(tempSlider.value) === 1) {
+                    console.log("[Tampermonkey] New chat detected, applying settings...");
+                    runMainLogic();
+                } else {
+                    console.log("[Tampermonkey] New chat detected, but settings already applied.");
+                }
+            }, 500);
             return;
         }
 
@@ -267,6 +283,18 @@ function setupGlobalClickListener() {
                 resolve();
                 return;
             }
+            
+            // Check if system prompt is already set by checking if the button has content indicator
+            const hasExistingPrompt = openButton.querySelector('[class*="has-content"]') || 
+                                     openButton.textContent.includes('Edit') ||
+                                     openButton.getAttribute('aria-label')?.includes('Edit');
+            
+            if (hasExistingPrompt) {
+                console.log("[Tampermonkey] System prompt already set, skipping.");
+                resolve();
+                return;
+            }
+            
             openButton.click();
 
             // 2. Wait for the textarea to appear
