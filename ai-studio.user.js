@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         AI Studio Advanced Settings Setter (URL-Configurable)
 // @namespace    http://tampermonkey.net/
-// @version      4.0
+// @version      4.1
 // @description  Applies advanced settings to AI Studio from URL parameters or internal defaults.
 // @author       You
 // @match        https://aistudio.google.com/*
 // @grant        none
-// @run-at       document-idle
+// @run-at       document-end
 // @downloadURL  https://raw.githubusercontent.com/bozdemir14/aistudio-userscript/refs/heads/main/ai-studio.user.js
 // @updateURL    https://raw.githubusercontent.com/bozdemir14/aistudio-userscript/refs/heads/main/ai-studio.user.js
 // ==/UserScript==
@@ -18,7 +18,6 @@
     // ===================================================================
     // === HELPER: waitForElement
     // ===================================================================
-    // Deneme2
     function waitForElement(selector, callback = null, timeout = 15000) {
         if (typeof callback === 'number') {
             timeout = callback;
@@ -67,10 +66,13 @@
     async function runMainLogic() {
         console.log("[Tampermonkey] AI Studio UI is ready. Initializing script.");
 
+        // Always set up the click listener for new chat detection
+        setupGlobalClickListener();
+
         // Check if settings are already applied by checking temperature
         const tempSlider = document.querySelector('[data-test-id="temperatureSliderContainer"] input[type="range"]');
         if (tempSlider && parseFloat(tempSlider.value) !== 1) {
-            console.log("[Tampermonkey] Settings already applied (temperature is not 1). Skipping initialization.");
+            console.log("[Tampermonkey] Settings already applied (temperature is not 1). Skipping settings application.");
             return;
         }
 
@@ -135,8 +137,6 @@ const defaultSettings = {
             grounding: urlParams.has('grounding') ? (urlParams.get('grounding').toLowerCase() === 'true' || urlParams.get('grounding') === '1') : defaultSettings.grounding,
             sp: urlParams.has('sp') ? decodeURIComponent(urlParams.get('sp')) : defaultSettings.sp
         };
-
-        setupGlobalClickListener();
 
         await applySettings(settings);
 
@@ -386,8 +386,31 @@ function setupGlobalClickListener() {
     window.addEventListener('error', (event) => console.error('[Tampermonkey] Uncaught error:', event.error));
     window.addEventListener('unhandledrejection', (event) => console.error('[Tampermonkey] Unhandled promise rejection:', event.reason));
 
-    waitForElement('mat-slide-toggle[data-test-toggle="enable-thinking"]', runMainLogic);
+    // Safari/Userscripts compatibility: Add multiple initialization strategies
+    function initializeScript() {
+        console.log("[Tampermonkey] AI Studio Advanced Settings Setter initialized.");
+        
+        // Strategy 1: Wait for the thinking toggle (primary indicator)
+        waitForElement('mat-slide-toggle[data-test-toggle="enable-thinking"]', () => {
+            console.log("[Tampermonkey] Thinking toggle found, running main logic.");
+            runMainLogic();
+        }, 20000);
+        
+        // Strategy 2: Fallback - wait for temperature slider (Safari backup)
+        setTimeout(() => {
+            const tempSlider = document.querySelector('[data-test-id="temperatureSliderContainer"] input[type="range"]');
+            if (tempSlider && !document.querySelector('mat-slide-toggle[data-test-toggle="enable-thinking"]')) {
+                console.log("[Tampermonkey] Using fallback initialization (Safari mode).");
+                runMainLogic();
+            }
+        }, 3000);
+    }
 
-    console.log("[Tampermonkey] AI Studio Advanced Settings Setter initialized.");
+    // Initialize immediately if DOM is ready, otherwise wait
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initializeScript);
+    } else {
+        initializeScript();
+    }
 
 })();
