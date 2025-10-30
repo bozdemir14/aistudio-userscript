@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         AI Studio Advanced Settings Setter (URL-Configurable)
 // @namespace    http://tampermonkey.net/
-// @version      4.3
+// @version      4.5
 // @description  Applies advanced settings to AI Studio from URL parameters or internal defaults.
 // @author       You
-// @match        https://aistudio.google.com/*
+// @match        https://aistudio.google.com/prompts/*
 // @grant        none
-// @run-at       document-end
+// @inject-into  content
+// @run-at       document-idle
 // @downloadURL  https://raw.githubusercontent.com/bozdemir14/aistudio-userscript/refs/heads/main/ai-studio.user.js
 // @updateURL    https://raw.githubusercontent.com/bozdemir14/aistudio-userscript/refs/heads/main/ai-studio.user.js
 // ==/UserScript==
@@ -14,6 +15,11 @@
 
 (function() {
     'use strict';
+
+    // Exit early if we're in an iframe
+    if (window.self !== window.top) {
+        return;
+    }
 
     // ===================================================================
     // === HELPER: waitForElement
