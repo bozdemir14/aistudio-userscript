@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Studio Advanced Settings Setter (URL-Configurable)
 // @namespace    http://tampermonkey.net/
-// @version      4.2
+// @version      4.3
 // @description  Applies advanced settings to AI Studio from URL parameters or internal defaults.
 // @author       You
 // @match        https://aistudio.google.com/*
@@ -64,24 +64,10 @@
     // ===================================================================
 
     async function runMainLogic() {
-        console.log("[Tampermonkey] AI Studio UI is ready. Initializing script.");
+        console.log("[Tampermonkey] Running main logic to apply settings.");
 
         // Always set up the click listener for new chat detection
         setupGlobalClickListener();
-
-        // Check if settings are already applied by checking temperature
-        // Wait a bit for the slider to appear if it doesn't exist yet
-        let tempSlider = document.querySelector('[data-test-id="temperatureSliderContainer"] input[type="range"]');
-        if (!tempSlider) {
-            console.log("[Tampermonkey] Temperature slider not found yet, waiting...");
-            await new Promise(resolve => setTimeout(resolve, 500));
-            tempSlider = document.querySelector('[data-test-id="temperatureSliderContainer"] input[type="range"]');
-        }
-        
-        if (tempSlider && parseFloat(tempSlider.value) !== 1) {
-            console.log("[Tampermonkey] Settings already applied (temperature is not 1). Skipping settings application.");
-            return;
-        }
 
 const defaultSettings = {
     model: "gemini-2.5-pro",
@@ -176,17 +162,9 @@ function setupGlobalClickListener() {
         const target = event.target;
 
         // Case 1: User starts a new chat.
+        // The polling mechanism will automatically detect temperature=1 and apply settings
         if (target.closest('a[href="/prompts/new_chat"]')) {
-            setTimeout(() => {
-                // Check if settings need to be applied
-                const tempSlider = document.querySelector('[data-test-id="temperatureSliderContainer"] input[type="range"]');
-                if (tempSlider && parseFloat(tempSlider.value) === 1) {
-                    console.log("[Tampermonkey] New chat detected, applying settings...");
-                    runMainLogic();
-                } else {
-                    console.log("[Tampermonkey] New chat detected, but settings already applied.");
-                }
-            }, 500);
+            console.log("[Tampermonkey] New chat button clicked, polling will handle settings.");
             return;
         }
 
@@ -393,54 +371,46 @@ function setupGlobalClickListener() {
     window.addEventListener('error', (event) => console.error('[Tampermonkey] Uncaught error:', event.error));
     window.addEventListener('unhandledrejection', (event) => console.error('[Tampermonkey] Unhandled promise rejection:', event.reason));
 
-    let lastUrl = location.href;
-    let hasInitialized = false;
+    let isRunning = false;
+    let pollInterval = null;
 
-    // Safari/Userscripts compatibility: Add multiple initialization strategies
-    function initializeScript() {
-        console.log("[Tampermonkey] Initializing on URL:", location.href);
+    // Polling function to check temperature every 0.5 seconds
+    function checkAndApplySettings() {
+        // Don't check if already running
+        if (isRunning) {
+            return;
+        }
+
+        const tempSlider = document.querySelector('[data-test-id="temperatureSliderContainer"] input[type="range"]');
         
-        // Strategy 1: Wait for the thinking toggle (primary indicator)
-        waitForElement('mat-slide-toggle[data-test-toggle="enable-thinking"]', () => {
-            console.log("[Tampermonkey] Thinking toggle found, running main logic.");
-            runMainLogic();
-            hasInitialized = true;
-        }, 20000);
-        
-        // Strategy 2: Fallback - wait for temperature slider (Safari backup)
-        setTimeout(() => {
-            const tempSlider = document.querySelector('[data-test-id="temperatureSliderContainer"] input[type="range"]');
-            if (tempSlider && !hasInitialized) {
-                console.log("[Tampermonkey] Using fallback initialization (Safari mode).");
-                runMainLogic();
-                hasInitialized = true;
-            }
-        }, 3000);
+        if (tempSlider && parseFloat(tempSlider.value) === 1) {
+            console.log("[Tampermonkey] Temperature is 1, applying settings...");
+            isRunning = true;
+            
+            runMainLogic().then(() => {
+                console.log("[Tampermonkey] Settings applied successfully.");
+                isRunning = false;
+            }).catch((error) => {
+                console.error("[Tampermonkey] Error applying settings:", error);
+                isRunning = false;
+            });
+        }
     }
 
-    // Detect URL changes in SPA (for direct bookmark navigation)
-    const urlObserver = new MutationObserver(() => {
-        const currentUrl = location.href;
-        if (currentUrl !== lastUrl) {
-            console.log("[Tampermonkey] URL changed from", lastUrl, "to", currentUrl);
-            lastUrl = currentUrl;
-            hasInitialized = false;
-            
-            // Give the SPA time to render, then initialize
-            setTimeout(() => {
-                initializeScript();
-            }, 500);
+    // Start polling every 500ms
+    function startPolling() {
+        if (pollInterval) {
+            clearInterval(pollInterval);
         }
-    });
+        console.log("[Tampermonkey] Starting temperature polling...");
+        pollInterval = setInterval(checkAndApplySettings, 500);
+    }
 
-    // Start observing URL changes
-    urlObserver.observe(document.documentElement, { childList: true, subtree: true });
-
-    // Initial page load
+    // Initialize immediately if DOM is ready, otherwise wait
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initializeScript);
+        document.addEventListener('DOMContentLoaded', startPolling);
     } else {
-        initializeScript();
+        startPolling();
     }
 
 })();
