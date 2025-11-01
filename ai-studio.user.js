@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Studio Advanced Settings Setter (URL-Configurable)
 // @namespace    http://tampermonkey.net/
-// @version      4.5
+// @version      4.9
 // @description  Applies advanced settings to AI Studio from URL parameters or internal defaults.
 // @author       You
 // @match        https://aistudio.google.com/prompts/*
@@ -286,27 +286,56 @@ function setupGlobalClickListener() {
                 return;
             }
             
+            // Set flag BEFORE clicking to ensure observer catches it
+            isAutomatingSystemPrompt = true;
+            console.log("[Tampermonkey] Starting automated system prompt setting (hidden mode).");
+            
+            // Click to open the dialog
             openButton.click();
 
-            // 2. Wait for the textarea to appear
-            waitForElement('textarea[aria-label="System instructions"]', (textArea) => {
-                // FIX: Focus the textarea before setting its value to ensure it's interactive.
-                textArea.focus();
-                textArea.value = promptText;
-                textArea.dispatchEvent(new Event('input', { bubbles: true }));
-
-                // FIX: The close button selector has changed.
-                // Old: 'button[aria-label="Close system instructions"]'
-                // New: 'button[aria-label="Close panel"]'
-                const closeButton = document.querySelector('button[aria-label="Close panel"]');
-                if (closeButton) {
-                    closeButton.click();
-                } else {
-                    console.error("[Tampermonkey] Could not find the system instructions close button.");
+            // 2. Wait for the overlay pane to appear and hide it immediately
+            waitForElement('.cdk-overlay-pane', (overlayPane) => {
+                overlayPane.classList.add('hide-during-automation');
+                
+                // Also hide the backdrop if it exists
+                const backdrop = document.querySelector('.cdk-overlay-backdrop');
+                if (backdrop) {
+                    backdrop.classList.add('hide-during-automation');
                 }
+                
+                // 3. Wait for the dialog container
+                waitForElement('.mat-mdc-dialog-container', (dialogContainer) => {
+                    dialogContainer.classList.add('hide-during-automation');
+                    
+                    // 4. Wait for the textarea to appear
+                    waitForElement('textarea[aria-label="System instructions"]', (textArea) => {
+                        // Set the value without focusing (to avoid interfering with user typing)
+                        textArea.value = promptText;
+                        textArea.dispatchEvent(new Event('input', { bubbles: true }));
 
-                // Give a moment for the panel to close before resolving
-                setTimeout(resolve, 150);
+                        // Close the dialog
+                        const closeButton = document.querySelector('button[aria-label="Close panel"]');
+                        if (closeButton) {
+                            closeButton.click();
+                        } else {
+                            console.error("[Tampermonkey] Could not find the system instructions close button.");
+                        }
+
+                        // Clean up: remove hiding classes and reset flag
+                        setTimeout(() => {
+                            overlayPane.classList.remove('hide-during-automation');
+                            dialogContainer.classList.remove('hide-during-automation');
+                            if (backdrop) {
+                                backdrop.classList.remove('hide-during-automation');
+                            }
+                            isAutomatingSystemPrompt = false;
+                            console.log("[Tampermonkey] Automated system prompt setting complete.");
+                        }, 100);
+
+                        // Give a moment for the panel to close before resolving
+                        setTimeout(resolve, 150);
+                    }, 5000);
+                }, 5000);
             }, 5000);
         });
     }
@@ -373,6 +402,88 @@ function setupGlobalClickListener() {
     // ===================================================================
     // === SCRIPT START
     // ===================================================================
+
+    // Hide the system instructions preset dropdown menu
+    function hideSystemInstructionsDropdown() {
+        const style = document.createElement('style');
+        style.id = 'tampermonkey-system-instructions-style';
+        style.textContent = `
+            /* Hide the system instructions preset dropdown - aggressive selector */
+            ms-system-instructions mat-form-field.mat-mdc-form-field-type-mat-select,
+            ms-system-instructions mat-form-field[class*="mat-select"],
+            ms-system-instructions .mat-mdc-form-field-type-mat-select,
+            div[class*="panel-content"] ms-system-instructions mat-form-field:first-of-type {
+                display: none !important;
+                visibility: hidden !important;
+                height: 0 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                opacity: 0 !important;
+            }
+            
+            /* Adjust spacing since dropdown is hidden */
+            ms-system-instructions .title-row {
+                margin-top: 0 !important;
+            }
+            
+            /* AGGRESSIVE: Hide ALL system instruction dialogs by default */
+            .cdk-overlay-pane:has([id*="mat-mdc-dialog-title"]:has(.title)),
+            .cdk-overlay-pane:has(.panel-header .title) {
+                opacity: 0 !important;
+                visibility: hidden !important;
+                pointer-events: none !important;
+                transition: none !important;
+            }
+            
+            /* Show them only when manually opened (not during automation) */
+            .cdk-overlay-pane.user-opened {
+                opacity: 1 !important;
+                visibility: visible !important;
+                pointer-events: auto !important;
+            }
+            
+            /* Hide backdrop during automation */
+            .cdk-overlay-backdrop.hide-during-automation {
+                opacity: 0 !important;
+                pointer-events: none !important;
+                visibility: hidden !important;
+                transition: none !important;
+            }
+        `;
+        document.head.appendChild(style);
+        console.log("[Tampermonkey] System instructions dropdown hidden.");
+    }
+
+    // Apply the style immediately (before DOM fully loads)
+    hideSystemInstructionsDropdown();
+    
+    // Watch for system instruction dialogs and hide them immediately during automation
+    let isAutomatingSystemPrompt = false;
+    const dialogObserver = new MutationObserver((mutations) => {
+        if (!isAutomatingSystemPrompt) return;
+        
+        for (const mutation of mutations) {
+            for (const node of mutation.addedNodes) {
+                if (node.nodeType === 1) { // Element node
+                    // Check if this is the overlay pane for system instructions
+                    if (node.classList && node.classList.contains('cdk-overlay-pane')) {
+                        const dialogTitle = node.querySelector('[class*="panel-header"] .title');
+                        if (dialogTitle && dialogTitle.textContent.includes('System instructions')) {
+                            node.classList.add('hide-during-automation');
+                            console.log("[Tampermonkey] System instructions dialog hidden during automation.");
+                        }
+                    }
+                    // Also hide the backdrop
+                    if (node.classList && node.classList.contains('cdk-overlay-backdrop')) {
+                        node.classList.add('hide-during-automation');
+                    }
+                }
+            }
+        }
+    });
+    
+    // Start observing immediately
+    dialogObserver.observe(document.body, { childList: true, subtree: true });
 
     window.addEventListener('error', (event) => console.error('[Tampermonkey] Uncaught error:', event.error));
     window.addEventListener('unhandledrejection', (event) => console.error('[Tampermonkey] Unhandled promise rejection:', event.reason));
