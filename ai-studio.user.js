@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Studio Advanced Settings Setter (URL-Configurable)
 // @namespace    http://tampermonkey.net/
-// @version      5.0
+// @version      5.01
 // @description  Applies advanced settings to AI Studio from URL parameters or internal defaults.
 // @author       You
 // @match        https://aistudio.google.com/prompts/*
@@ -218,23 +218,32 @@ function setupGlobalClickListener() {
 
     function setModel(modelId) {
         return new Promise(resolve => {
-            const modelSelectorTrigger = document.querySelector('[data-test-ms-model-selector]');
-            if (!modelSelectorTrigger || modelSelectorTrigger.textContent.trim().includes(modelId)) {
+            const modelSelectorTrigger = document.querySelector('.model-selector-card');
+            if (!modelSelectorTrigger) {
+                console.error("[Tampermonkey] Model selector trigger not found");
+                resolve();
+                return;
+            }
+            // Check if already selected by checking the subtitle
+            const currentModel = modelSelectorTrigger.querySelector('.subtitle')?.textContent?.trim();
+            if (currentModel === modelId) {
                 resolve();
                 return;
             }
             modelSelectorTrigger.click();
-            waitForElement('mat-option .base-model-subtitle', () => {
-                const option = Array.from(document.querySelectorAll('mat-option .base-model-subtitle')).find(el => el.textContent.trim() === modelId);
-                if (option) {
-                    option.closest('mat-option').click();
+            waitForElement('ms-model-carousel-row', () => {
+                const modelButton = document.querySelector(`button[id="model-carousel-row-models/${modelId}"]`);
+                if (modelButton) {
+                    modelButton.click();
+                } else {
+                    console.error(`[Tampermonkey] Model button for ${modelId} not found`);
                 }
                 setTimeout(() => {
                     const backdrop = document.querySelector('.cdk-overlay-backdrop');
                     if (backdrop) backdrop.click();
                     resolve();
                 }, 150);
-            });
+            }, 5000);
         });
     }
 
@@ -298,9 +307,15 @@ function setupGlobalClickListener() {
             // Click to open the dialog
             openButton.click();
 
-            // 2. Wait for the overlay pane to appear and hide it immediately
-            waitForElement('.cdk-overlay-pane', (overlayPane) => {
-                overlayPane.classList.add('hide-during-automation');
+            // Wait for the dialog container first
+            waitForElement('.mat-mdc-dialog-container', (dialogContainer) => {
+                dialogContainer.classList.add('hide-during-automation');
+                
+                // Also hide the overlay pane if it exists
+                const overlayPane = document.querySelector('.cdk-overlay-pane');
+                if (overlayPane) {
+                    overlayPane.classList.add('hide-during-automation');
+                }
                 
                 // Also hide the backdrop if it exists
                 const backdrop = document.querySelector('.cdk-overlay-backdrop');
@@ -308,38 +323,35 @@ function setupGlobalClickListener() {
                     backdrop.classList.add('hide-during-automation');
                 }
                 
-                // 3. Wait for the dialog container
-                waitForElement('.mat-mdc-dialog-container', (dialogContainer) => {
-                    dialogContainer.classList.add('hide-during-automation');
-                    
-                    // 4. Wait for the textarea to appear
-                    waitForElement('textarea[aria-label="System instructions"]', (textArea) => {
-                        // Set the value without focusing (to avoid interfering with user typing)
-                        textArea.value = promptText;
-                        textArea.dispatchEvent(new Event('input', { bubbles: true }));
+                // Wait for the textarea to appear
+                waitForElement('textarea[aria-label="System instructions"]', (textArea) => {
+                    // Set the value without focusing (to avoid interfering with user typing)
+                    textArea.value = promptText;
+                    textArea.dispatchEvent(new Event('input', { bubbles: true }));
 
-                        // Close the dialog by clicking the backdrop
-                        const backdrop = document.querySelector('.cdk-overlay-backdrop');
-                        if (backdrop) {
-                            backdrop.click();
-                        } else {
-                            console.error("[Tampermonkey] Could not find the backdrop to close system instructions dialog.");
-                        }
+                    // Close the dialog by clicking the backdrop
+                    const backdrop = document.querySelector('.cdk-overlay-backdrop');
+                    if (backdrop) {
+                        backdrop.click();
+                    } else {
+                        console.error("[Tampermonkey] Could not find the backdrop to close system instructions dialog.");
+                    }
 
-                        // Clean up: remove hiding classes and reset flag
-                        setTimeout(() => {
+                    // Clean up: remove hiding classes and reset flag
+                    setTimeout(() => {
+                        dialogContainer.classList.remove('hide-during-automation');
+                        if (overlayPane) {
                             overlayPane.classList.remove('hide-during-automation');
-                            dialogContainer.classList.remove('hide-during-automation');
-                            if (backdrop) {
-                                backdrop.classList.remove('hide-during-automation');
-                            }
-                            isAutomatingSystemPrompt = false;
-                            console.log("[Tampermonkey] Automated system prompt setting complete.");
-                        }, 100);
+                        }
+                        if (backdrop) {
+                            backdrop.classList.remove('hide-during-automation');
+                        }
+                        isAutomatingSystemPrompt = false;
+                        console.log("[Tampermonkey] Automated system prompt setting complete.");
+                    }, 100);
 
-                        // Give a moment for the panel to close before resolving
-                        setTimeout(resolve, 150);
-                    }, 5000);
+                    // Give a moment for the panel to close before resolving
+                    setTimeout(resolve, 150);
                 }, 5000);
             }, 5000);
         });
@@ -492,7 +504,9 @@ function setupGlobalClickListener() {
 
     // Inject model switch buttons
     waitForElement('.settings-item.settings-model-selector', (modelSelectorDiv) => {
+        if (document.querySelector('.model-switch-buttons')) return;
         const buttonContainer = document.createElement('div');
+        buttonContainer.className = 'model-switch-buttons';
         buttonContainer.style.display = 'flex';
         buttonContainer.style.gap = '10px';
         buttonContainer.style.marginTop = '10px';
