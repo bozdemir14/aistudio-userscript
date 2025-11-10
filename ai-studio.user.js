@@ -238,6 +238,11 @@ function setupGlobalClickListener() {
         });
     }
 
+    // Global functions for one-click model switching
+    window.setModelPro = () => setModel('gemini-2.5-pro');
+    window.setModelFlash = () => setModel('gemini-flash-latest');
+    window.setModelNano = () => setModel('gemini-2.5-flash-image');
+
     function setThinkingBudget(budgetValue) {
         const thinkingToggle = document.querySelector('mat-slide-toggle[data-test-toggle="enable-thinking"] button');
         if (thinkingToggle && thinkingToggle.getAttribute('aria-checked') === 'false') thinkingToggle.click();
@@ -484,6 +489,33 @@ function setupGlobalClickListener() {
     
     // Start observing immediately
     dialogObserver.observe(document.body, { childList: true, subtree: true });
+
+    // Inject model switch buttons
+    waitForElement('.settings-item.settings-model-selector', (modelSelectorDiv) => {
+        const buttonContainer = document.createElement('div');
+        buttonContainer.style.display = 'flex';
+        buttonContainer.style.gap = '10px';
+        buttonContainer.style.marginTop = '10px';
+        const proButton = document.createElement('button');
+        proButton.textContent = 'Pro';
+        proButton.onclick = () => window.setModelPro();
+        proButton.style.padding = '5px 10px';
+        proButton.style.cursor = 'pointer';
+        const flashButton = document.createElement('button');
+        flashButton.textContent = 'Flash';
+        flashButton.onclick = () => window.setModelFlash();
+        flashButton.style.padding = '5px 10px';
+        flashButton.style.cursor = 'pointer';
+        const nanoButton = document.createElement('button');
+        nanoButton.textContent = 'Nano Banana';
+        nanoButton.onclick = () => window.setModelNano();
+        nanoButton.style.padding = '5px 10px';
+        nanoButton.style.cursor = 'pointer';
+        buttonContainer.appendChild(proButton);
+        buttonContainer.appendChild(flashButton);
+        buttonContainer.appendChild(nanoButton);
+        modelSelectorDiv.parentNode.insertBefore(buttonContainer, modelSelectorDiv.nextSibling);
+    });
 
     window.addEventListener('error', (event) => console.error('[Tampermonkey] Uncaught error:', event.error));
     window.addEventListener('unhandledrejection', (event) => console.error('[Tampermonkey] Unhandled promise rejection:', event.reason));
