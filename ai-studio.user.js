@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Studio Advanced Settings Setter (URL-Configurable)
 // @namespace    http://tampermonkey.net/
-// @version      5.01
+// @version      5.02
 // @description  Applies advanced settings to AI Studio from URL parameters or internal defaults.
 // @author       You
 // @match        https://aistudio.google.com/prompts/*
@@ -230,6 +230,8 @@ function setupGlobalClickListener() {
                 resolve();
                 return;
             }
+            // Set flag before clicking to hide overlay immediately
+            isAutomatingModelSelection = true;
             modelSelectorTrigger.click();
             waitForElement('ms-model-carousel-row', () => {
                 const modelButton = document.querySelector(`button[id="model-carousel-row-models/${modelId}"]`);
@@ -241,6 +243,8 @@ function setupGlobalClickListener() {
                 setTimeout(() => {
                     const backdrop = document.querySelector('.cdk-overlay-backdrop');
                     if (backdrop) backdrop.click();
+                    // Reset flag after closing
+                    isAutomatingModelSelection = false;
                     resolve();
                 }, 150);
             }, 5000);
@@ -466,6 +470,14 @@ function setupGlobalClickListener() {
                 visibility: hidden !important;
                 transition: none !important;
             }
+            
+            /* Hide overlay pane during automation */
+            .cdk-overlay-pane.hide-during-automation {
+                opacity: 0 !important;
+                visibility: hidden !important;
+                pointer-events: none !important;
+                transition: none !important;
+            }
         `;
         document.head.appendChild(style);
         console.log("[Tampermonkey] System instructions dropdown hidden.");
@@ -476,8 +488,9 @@ function setupGlobalClickListener() {
     
     // Watch for system instruction dialogs and hide them immediately during automation
     let isAutomatingSystemPrompt = false;
+    let isAutomatingModelSelection = false;
     const dialogObserver = new MutationObserver((mutations) => {
-        if (!isAutomatingSystemPrompt) return;
+        if (!isAutomatingSystemPrompt && !isAutomatingModelSelection) return;
         
         for (const mutation of mutations) {
             for (const node of mutation.addedNodes) {
@@ -488,6 +501,11 @@ function setupGlobalClickListener() {
                         if (dialogTitle && dialogTitle.textContent.includes('System instructions')) {
                             node.classList.add('hide-during-automation');
                             console.log("[Tampermonkey] System instructions dialog hidden during automation.");
+                        }
+                        // Also check for model selection overlay
+                        if (isAutomatingModelSelection && node.querySelector('ms-model-carousel-row')) {
+                            node.classList.add('hide-during-automation');
+                            console.log("[Tampermonkey] Model selection overlay hidden during automation.");
                         }
                     }
                     // Also hide the backdrop
