@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Studio Advanced Settings Setter (URL-Configurable)
 // @namespace    http://tampermonkey.net/
-// @version      4.9
+// @version      4.91
 // @description  Applies advanced settings to AI Studio from URL parameters or internal defaults.
 // @author       You
 // @match        https://aistudio.google.com/prompts/*
@@ -313,12 +313,12 @@ function setupGlobalClickListener() {
                         textArea.value = promptText;
                         textArea.dispatchEvent(new Event('input', { bubbles: true }));
 
-                        // Close the dialog
-                        const closeButton = document.querySelector('button[aria-label="Close panel"]');
-                        if (closeButton) {
-                            closeButton.click();
+                        // Close the dialog by clicking the backdrop
+                        const backdrop = document.querySelector('.cdk-overlay-backdrop');
+                        if (backdrop) {
+                            backdrop.click();
                         } else {
-                            console.error("[Tampermonkey] Could not find the system instructions close button.");
+                            console.error("[Tampermonkey] Could not find the backdrop to close system instructions dialog.");
                         }
 
                         // Clean up: remove hiding classes and reset flag
