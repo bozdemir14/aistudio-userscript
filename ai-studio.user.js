@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Studio Advanced Settings Setter (URL-Configurable)
 // @namespace    http://tampermonkey.net/
-// @version      5.1
+// @version      6.0
 // @description  Applies advanced settings to AI Studio from URL parameters or internal defaults.
 // @author       You
 // @match        https://aistudio.google.com/prompts/*
