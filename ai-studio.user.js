@@ -21,6 +21,9 @@
         return;
     }
 
+    let activeModel = null;
+    let desiredTemp = 0; // Will be updated by runMainLogic
+
     // ===================================================================
     // === HELPER: waitForElement
     // ===================================================================
@@ -121,10 +124,19 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
 };
 
         const urlParams = new URLSearchParams(window.location.search);
+
+        // Update global desired temperature from URL or defaults
+        desiredTemp = urlParams.has('temp') ? parseFloat(urlParams.get('temp')) : defaultSettings.temp;
+
+        // Determine the model to use, respecting the user's last choice via activeModel
+        const modelFromUrl = urlParams.get('model');
+        const modelToSet = activeModel || modelFromUrl || defaultSettings.model;
+        activeModel = modelToSet; // Persist the choice for this session
+
         const settings = {
-            model: urlParams.get('model') || defaultSettings.model,
+            model: modelToSet,
             budget: urlParams.has('budget') ? parseInt(urlParams.get('budget'), 10) : defaultSettings.budget,
-            temp: urlParams.has('temp') ? parseFloat(urlParams.get('temp')) : defaultSettings.temp,
+            temp: desiredTemp, // Use the globally set desiredTemp
             grounding: urlParams.has('grounding') ? (urlParams.get('grounding').toLowerCase() === 'true' || urlParams.get('grounding') === '1') : defaultSettings.grounding,
             sp: urlParams.has('sp') ? decodeURIComponent(urlParams.get('sp')) : defaultSettings.sp
         };
@@ -244,9 +256,18 @@ function setupGlobalClickListener() {
     }
 
     // Global functions for one-click model switching
-    window.setModelPro = () => setModel('gemini-2.5-pro');
-    window.setModelFlash = () => setModel('gemini-flash-latest');
-    window.setModelNano = () => setModel('gemini-2.5-flash-image');
+    window.setModelPro = () => {
+        activeModel = 'gemini-2.5-pro';
+        setModel(activeModel).then(() => setTemperature(desiredTemp));
+    };
+    window.setModelFlash = () => {
+        activeModel = 'gemini-flash-latest';
+        setModel(activeModel).then(() => setTemperature(desiredTemp));
+    };
+    window.setModelNano = () => {
+        activeModel = 'gemini-2.5-flash-image';
+        setModel(activeModel).then(() => setTemperature(desiredTemp));
+    };
 
     function setThinkingBudget(budgetValue) {
         const thinkingToggle = document.querySelector('mat-slide-toggle[data-test-toggle="enable-thinking"] button');
