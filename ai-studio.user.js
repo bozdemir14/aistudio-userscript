@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Studio Advanced Settings (Zero-Flash & Flexible Models)
 // @namespace    http://tampermonkey.net/
-// @version      7.0
+// @version      7.1
 // @description  Applies settings silently. Supports flexible model versioning (Gemini 3 priority).
 // @author       You
 // @match        https://aistudio.google.com/prompts/*
@@ -15,22 +15,21 @@
 (function() {
     'use strict';
 
-    // Exit if iframe
     if (window.self !== window.top) return;
 
     // ===================================================================
-    // === CONFIGURATION & MODEL PREFERENCES
+    // === CONFIGURATION
     // ===================================================================
     
-    // Priority lists: The script tries the first one; if missing, tries the next.
     const MODEL_PREFS = {
-        PRO:   ['gemini-3-pro', 'gemini-3-pro-latest', 'gemini-3-pro-preview', 'gemini-2.5-pro'],
-        FLASH: ['gemini-3-flash-latest', 'gemini-3-flash', 'gemini-3-flash-preview', 'gemini-flash-latest'],
-        NANO:  ['gemini-3-flash-image', 'gemini-3-flash-image-preview', 'gemini-3-flash-image-latest', 'gemini-2.5-flash-image']
+        PRO:   ['gemini-3-pro', 'gemini-3-pro-latest', 'gemini-3-pro-preview', 'gemini-2.5-pro', 'gemini-1.5-pro'],
+        // Added 2.5-flash specifically for Safari/Production compatibility
+        FLASH: ['gemini-3-flash-latest', 'gemini-3-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-flash-latest', 'gemini-1.5-flash'],
+        NANO:  ['gemini-3-flash-image', 'gemini-3-flash-image-preview', 'gemini-2.5-flash-image']
     };
 
     const DEFAULT_SETTINGS = {
-        modelPrefs: MODEL_PREFS.PRO, // Default to Pro list
+        modelPrefs: MODEL_PREFS.PRO,
         budget: -1,
         grounding: false,
         sp: `You are a concise, expert-level assistant. Provide precise, actionable answers.
@@ -72,7 +71,6 @@
 Be fast, factual, and structured. Focus on delivering maximum value with minimal noise.`
     };
 
-    // Global lock to prevent interference
     let isBusy = false;
 
     // ===================================================================
@@ -82,7 +80,6 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
     function waitForElement(selector, callback, timeout = 10000) {
         const el = document.querySelector(selector);
         if (el) { callback(el); return; }
-        
         const observer = new MutationObserver((mutations, obs) => {
             const element = document.querySelector(selector);
             if (element) { obs.disconnect(); callback(element); }
@@ -91,7 +88,7 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
         setTimeout(() => { observer.disconnect(); }, timeout);
     }
 
-    // Inject CSS to hide overlays ONLY when script is automating
+    // CSS for hiding automation and styling buttons
     const style = document.createElement('style');
     style.textContent = `
         body.script-automating .cdk-overlay-container,
@@ -100,10 +97,22 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
             opacity: 0 !important;
             visibility: hidden !important;
             pointer-events: none !important;
-            display: none !important; /* Aggressive hide */
+            display: none !important;
         }
-        /* Hide system instruction dropdown triggers permanently if desired */
         ms-system-instructions mat-form-field { display: none !important; }
+        
+        /* Custom Button Styles */
+        .as-custom-btn {
+            padding: 4px 10px; 
+            cursor: pointer; 
+            border-radius: 16px; 
+            border: 1px solid #555; 
+            background: none; 
+            color: var(--mat-sys-on-surface); 
+            font-size: 13px;
+        }
+        .as-custom-btn:hover { background-color: rgba(255,255,255,0.1); }
+        .as-btn-group { display: flex; gap: 8px; margin-top: 8px; margin-bottom: 8px; }
     `;
     document.head.appendChild(style);
 
@@ -112,12 +121,25 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
             document.body.classList.add('script-automating');
             isBusy = true;
         } else {
-            // Small delay to ensure overlays are actually gone/closed before showing UI again
             setTimeout(() => {
                 document.body.classList.remove('script-automating');
                 isBusy = false;
             }, 100);
         }
+    }
+
+    function focusMainInput() {
+        // Small delay to allow UI to settle (e.g., toggle animations)
+        setTimeout(() => {
+            const el = document.querySelector('textarea[aria-label="Type something or tab to choose an example prompt"], textarea[aria-label="Start typing a prompt"]');
+            if (el) {
+                el.focus();
+                // Move cursor to end
+                const val = el.value;
+                el.value = '';
+                el.value = val;
+            }
+        }, 150);
     }
 
     // ===================================================================
@@ -126,18 +148,12 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
 
     async function runMainLogic() {
         if (isBusy) return;
-        console.log("[Tampermonkey] Applying settings...");
-
+        
         const urlParams = new URLSearchParams(window.location.search);
-
-        // 1. Determine Model Priority List
         let targetModelList = DEFAULT_SETTINGS.modelPrefs;
         const urlModel = urlParams.get('model');
-        
-        // If URL has a specific model, prioritize that single model, otherwise use defaults
         if (urlModel) targetModelList = [urlModel];
 
-        // 2. Prepare Settings
         const settings = {
             modelList: targetModelList,
             budget: urlParams.has('budget') ? parseInt(urlParams.get('budget'), 10) : DEFAULT_SETTINGS.budget,
@@ -145,31 +161,23 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
             sp: urlParams.has('sp') ? decodeURIComponent(urlParams.get('sp')) : DEFAULT_SETTINGS.sp
         };
 
-        // 3. Execute Automation
-        // We wrap everything in one "busy" block to keep the screen stable
         toggleAutomationMode(true);
         
         try {
-            // Select model first (highest priority)
             await selectBestModel(settings.modelList);
-            
-            // Apply other settings
             setThinkingBudget(settings.budget);
             setGrounding(settings.grounding);
-            
-            // Apply System Prompt
             await setSystemPrompt(settings.sp);
         } catch (e) {
             console.error("[Tampermonkey] Automation error:", e);
         } finally {
             toggleAutomationMode(false);
             
-            // Handle YT/Focus logic after UI returns
             const ytUrlParam = urlParams.get('yt_url');
             if (ytUrlParam) {
                 attachYouTubeVideo(decodeURIComponent(ytUrlParam), "Summarize this video.");
             } else {
-                setTimeout(focusMainInput, 300);
+                focusMainInput();
             }
         }
     }
@@ -183,27 +191,19 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
             const selector = document.querySelector('.model-selector-card');
             if (!selector) { resolve(); return; }
 
-            // 1. Check if current model is already one of the candidates (Optimization)
             const currentSubtitle = selector.querySelector('.subtitle')?.textContent?.trim();
             if (currentSubtitle && candidateList.some(m => currentSubtitle.includes(m))) {
-                console.log(`[Tampermonkey] Already on preferred model: ${currentSubtitle}`);
                 resolve();
                 return;
             }
 
-            // 2. Open Dropdown
             selector.click();
 
-            // 3. Wait for list and pick best match
             waitForElement('ms-model-carousel-row', () => {
                 let found = false;
-                
-                // Iterate through preferences in order
                 for (const modelId of candidateList) {
-                    // Exact ID match check
                     const btn = document.querySelector(`button[id="model-carousel-row-models/${modelId}"]`);
                     if (btn) {
-                        console.log(`[Tampermonkey] Switching to: ${modelId}`);
                         btn.click();
                         found = true;
                         break;
@@ -211,18 +211,15 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
                 }
 
                 if (!found) {
-                    console.warn("[Tampermonkey] No preferred models found in dropdown.");
-                    // Close dropdown if nothing found
+                    console.warn("[Tampermonkey] No preferred models found. List:", candidateList);
                     const backdrop = document.querySelector('.cdk-overlay-backdrop');
                     if (backdrop) backdrop.click();
                 } else {
-                     // Ensure backdrop closes (sometimes click isn't enough to close immediately)
                      setTimeout(() => {
                          const backdrop = document.querySelector('.cdk-overlay-backdrop');
                          if (backdrop) backdrop.click();
                      }, 50);
                 }
-
                 setTimeout(resolve, 150);
             }, 3000);
         });
@@ -233,18 +230,13 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
             const openBtn = document.querySelector('button[data-test-system-instructions-card]');
             if (!openBtn) { resolve(); return; }
 
-            // Check if already set
             const hasContent = openBtn.querySelector('[class*="has-content"]');
             if (hasContent) { resolve(); return; }
 
             openBtn.click();
-
-            // Wait for textarea
             waitForElement('textarea[aria-label="System instructions"]', (textArea) => {
                 textArea.value = promptText;
                 textArea.dispatchEvent(new Event('input', { bubbles: true }));
-
-                // Close via backdrop
                 setTimeout(() => {
                     const backdrop = document.querySelector('.cdk-overlay-backdrop');
                     if (backdrop) backdrop.click();
@@ -255,26 +247,57 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
     }
 
     function setThinkingBudget(val) {
-        // 1. Enable thinking if disabled
+        // Enable Thinking Toggle if needed
         const thinkingToggle = document.querySelector('mat-slide-toggle[data-test-toggle="enable-thinking"] button');
         if (thinkingToggle && thinkingToggle.getAttribute('aria-checked') === 'false') {
             thinkingToggle.click();
         }
 
-        // 2. Handle Manual vs Auto
+        // Logic for Gemini 2.5 Slider
         const manualToggle = document.querySelector('mat-slide-toggle[data-test-toggle="manual-budget"] button');
         if (manualToggle) {
             const isManual = manualToggle.getAttribute('aria-checked') === 'true';
-            // If budget is -1 (Auto), ensure manual is OFF
             if (val === -1 && isManual) manualToggle.click();
-            // If budget is >= 0, ensure manual is ON
             else if (val >= 0 && !isManual) manualToggle.click();
         }
 
-        // 3. Set Slider
         if (val >= 0) {
-            setSliderValue('[data-test-id="user-setting-budget-animation-wrapper"] input[type="range"]', val);
+            const slider = document.querySelector('[data-test-id="user-setting-budget-animation-wrapper"] input[type="range"]');
+            if (slider) {
+                slider.value = val;
+                slider.dispatchEvent(new Event('input', { bubbles: true }));
+                slider.dispatchEvent(new Event('change', { bubbles: true }));
+            }
         }
+    }
+
+    // New Logic for Gemini 3 "Thinking Level" (High/Low)
+    async function setThinkingLevel(level) {
+        const select = document.querySelector('mat-select[aria-label="Thinking Level"]');
+        if (!select) return;
+
+        // Check current text
+        const currentVal = select.querySelector('.mat-mdc-select-value-text')?.textContent?.trim();
+        if (currentVal === level) {
+            focusMainInput();
+            return;
+        }
+
+        toggleAutomationMode(true);
+        select.click();
+
+        // Wait for overlay options
+        waitForElement('.cdk-overlay-pane mat-option', () => {
+            const options = document.querySelectorAll('mat-option');
+            for (const opt of options) {
+                if (opt.textContent.includes(level)) {
+                    opt.click();
+                    break;
+                }
+            }
+            toggleAutomationMode(false);
+            focusMainInput();
+        }, 2000);
     }
 
     function setGrounding(desiredState) {
@@ -284,22 +307,7 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
         }
     }
 
-    function setSliderValue(selector, value) {
-        const slider = document.querySelector(selector);
-        if (slider) {
-            slider.value = value;
-            slider.dispatchEvent(new Event('input', { bubbles: true }));
-            slider.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-    }
-
-    function focusMainInput() {
-        const el = document.querySelector('textarea[aria-label="Type something or tab to choose an example prompt"], textarea[aria-label="Start typing a prompt"]');
-        if (el) el.focus();
-    }
-
     function attachYouTubeVideo(url, prompt) {
-        // (Existing logic preserved)
         const area = document.querySelector('textarea[aria-label="Type something or tab to choose an example prompt"]');
         if (!area) return;
         area.focus();
@@ -317,69 +325,112 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
     }
 
     // ===================================================================
-    // === EVENT LISTENERS & BUTTONS
+    // === UI INJECTION
     // ===================================================================
 
-    // Manual Model Buttons (Using Priority Logic)
+    function createBtn(text, onClick) {
+        const b = document.createElement('button');
+        b.textContent = text;
+        b.className = 'as-custom-btn';
+        b.onclick = (e) => {
+            e.preventDefault();
+            onClick();
+        };
+        return b;
+    }
+
     function injectButtons() {
+        // 1. Model Buttons
         waitForElement('.settings-item.settings-model-selector', (target) => {
             if (document.querySelector('.model-switch-buttons')) return;
-            
             const div = document.createElement('div');
-            div.className = 'model-switch-buttons';
-            div.style.cssText = 'display:flex; gap:8px; margin-top:10px;';
-
-            const createBtn = (text, list) => {
-                const b = document.createElement('button');
-                b.textContent = text;
-                b.style.cssText = 'padding:6px 12px; cursor:pointer; border-radius:16px; border:1px solid #444; background:none; color:var(--mat-sys-on-surface);';
-                b.onmouseover = () => b.style.backgroundColor = 'rgba(255,255,255,0.1)';
-                b.onmouseout = () => b.style.backgroundColor = 'transparent';
-                
-                b.onclick = async () => {
-                    toggleAutomationMode(true);
-                    await selectBestModel(list);
-                    toggleAutomationMode(false);
-                };
-                return b;
-            };
-
-            div.appendChild(createBtn('Pro', MODEL_PREFS.PRO));
-            div.appendChild(createBtn('Flash', MODEL_PREFS.FLASH));
-            div.appendChild(createBtn('Nano', MODEL_PREFS.NANO));
+            div.className = 'model-switch-buttons as-btn-group';
+            
+            div.appendChild(createBtn('Pro', async () => {
+                toggleAutomationMode(true);
+                await selectBestModel(MODEL_PREFS.PRO);
+                toggleAutomationMode(false);
+                focusMainInput();
+            }));
+            
+            div.appendChild(createBtn('Flash', async () => {
+                toggleAutomationMode(true);
+                await selectBestModel(MODEL_PREFS.FLASH);
+                toggleAutomationMode(false);
+                focusMainInput();
+            }));
+            
+            div.appendChild(createBtn('Nano', async () => {
+                toggleAutomationMode(true);
+                await selectBestModel(MODEL_PREFS.NANO);
+                toggleAutomationMode(false);
+                focusMainInput();
+            }));
 
             target.parentNode.insertBefore(div, target.nextSibling);
         });
-    }
 
-    // Global Listeners
-    function setupListeners() {
-        // 1. Listen for "New Chat" clicks
-        document.body.addEventListener('click', (e) => {
-            const link = e.target.closest('a[href="/prompts/new_chat"]');
-            if (link) {
-                console.log("[Tampermonkey] New chat detected via click.");
-                // Wait briefly for navigation to start, then run logic
-                setTimeout(runMainLogic, 500);
+        // 2. Thinking Level Buttons (Gemini 3)
+        // Find the header, then find the parent settings-item
+        const observer = new MutationObserver(() => {
+            const headers = Array.from(document.querySelectorAll('h3.item-description-title'));
+            const thinkingHeader = headers.find(h => h.textContent.trim() === 'Thinking level');
+            
+            if (thinkingHeader) {
+                // Navigate up to the settings item container
+                const container = thinkingHeader.closest('.settings-item');
+                if (container && !container.nextElementSibling?.classList.contains('thinking-level-buttons')) {
+                    const div = document.createElement('div');
+                    div.className = 'thinking-level-buttons as-btn-group';
+                    div.style.marginLeft = '16px'; // Align visually
+                    
+                    div.appendChild(createBtn('High', () => setThinkingLevel('High')));
+                    div.appendChild(createBtn('Low', () => setThinkingLevel('Low')));
+                    
+                    container.parentNode.insertBefore(div, container.nextSibling);
+                }
             }
         });
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
 
-        // 2. Inject buttons on load
-        injectButtons();
+    function setupFocusListeners() {
+        // Global listener to catch manual interactions and refocus
+        document.body.addEventListener('click', (e) => {
+            const target = e.target;
+            
+            // 1. Grounding Toggle
+            if (target.closest('[data-test-id="searchAsAToolTooltip"] button')) {
+                focusMainInput();
+                return;
+            }
+
+            // 2. Manual Budget Toggle (Gemini 2.5)
+            if (target.closest('mat-slide-toggle[data-test-toggle="manual-budget"]')) {
+                focusMainInput();
+                return;
+            }
+
+            // 3. New Chat Link
+            if (target.closest('a[href="/prompts/new_chat"]')) {
+                setTimeout(runMainLogic, 500);
+            }
+        }, true); // Capture phase
     }
 
     // ===================================================================
     // === INIT
     // ===================================================================
     
-    // Run on Load
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
-            setupListeners();
+            setupFocusListeners();
+            injectButtons();
             runMainLogic();
         });
     } else {
-        setupListeners();
+        setupFocusListeners();
+        injectButtons();
         runMainLogic();
     }
 
