@@ -23,7 +23,6 @@
     
     const MODEL_PREFS = {
         PRO:   ['gemini-3-pro', 'gemini-3-pro-latest', 'gemini-3-pro-preview', 'gemini-2.5-pro', 'gemini-1.5-pro'],
-        // Added 2.5-flash specifically for Safari/Production compatibility
         FLASH: ['gemini-3-flash-latest', 'gemini-3-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-flash-latest', 'gemini-1.5-flash'],
         NANO:  ['gemini-3-flash-image', 'gemini-3-flash-image-preview', 'gemini-2.5-flash-image']
     };
@@ -88,9 +87,9 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
         setTimeout(() => { observer.disconnect(); }, timeout);
     }
 
-    // CSS for hiding automation and styling buttons
     const style = document.createElement('style');
     style.textContent = `
+        /* Automation Hiding */
         body.script-automating .cdk-overlay-container,
         body.script-automating .cdk-overlay-backdrop,
         body.script-automating .cdk-overlay-pane {
@@ -101,7 +100,7 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
         }
         ms-system-instructions mat-form-field { display: none !important; }
         
-        /* Custom Button Styles */
+        /* Button Styling */
         .as-custom-btn {
             padding: 4px 10px; 
             cursor: pointer; 
@@ -129,7 +128,6 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
     }
 
     function focusMainInput() {
-        // Small delay to allow UI to settle (e.g., toggle animations)
         setTimeout(() => {
             const el = document.querySelector('textarea[aria-label="Type something or tab to choose an example prompt"], textarea[aria-label="Start typing a prompt"]');
             if (el) {
@@ -191,8 +189,9 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
             const selector = document.querySelector('.model-selector-card');
             if (!selector) { resolve(); return; }
 
+            // 1. Optimization: Check if already selected
             const currentSubtitle = selector.querySelector('.subtitle')?.textContent?.trim();
-            if (currentSubtitle && candidateList.some(m => currentSubtitle.includes(m))) {
+            if (currentSubtitle && candidateList.some(m => currentSubtitle === m)) { // Exact match preferred
                 resolve();
                 return;
             }
@@ -200,27 +199,39 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
             selector.click();
 
             waitForElement('ms-model-carousel-row', () => {
-                let found = false;
+                // 2. ROBUST FIND: Do not use ID selectors. Scan all buttons.
+                const allButtons = Array.from(document.querySelectorAll('ms-model-carousel-row button'));
+                let targetBtn = null;
+
+                // Iterate priorities
                 for (const modelId of candidateList) {
-                    const btn = document.querySelector(`button[id="model-carousel-row-models/${modelId}"]`);
-                    if (btn) {
-                        btn.click();
-                        found = true;
-                        break;
+                    // Find button where subtitle matches modelId
+                    targetBtn = allButtons.find(btn => {
+                        const sub = btn.querySelector('.model-subtitle')?.textContent?.trim();
+                        return sub === modelId;
+                    });
+                    
+                    if (targetBtn) {
+                        console.log(`[Tampermonkey] Found match: ${modelId}`);
+                        break; 
                     }
                 }
 
-                if (!found) {
+                if (targetBtn) {
+                    targetBtn.click();
+                } else {
                     console.warn("[Tampermonkey] No preferred models found. List:", candidateList);
+                    // Force close if no match
                     const backdrop = document.querySelector('.cdk-overlay-backdrop');
                     if (backdrop) backdrop.click();
-                } else {
-                     setTimeout(() => {
-                         const backdrop = document.querySelector('.cdk-overlay-backdrop');
-                         if (backdrop) backdrop.click();
-                     }, 50);
                 }
-                setTimeout(resolve, 150);
+
+                // Ensure closure
+                setTimeout(() => {
+                    const backdrop = document.querySelector('.cdk-overlay-backdrop');
+                    if (backdrop) backdrop.click();
+                    setTimeout(resolve, 150);
+                }, 50);
             }, 3000);
         });
     }
@@ -247,13 +258,11 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
     }
 
     function setThinkingBudget(val) {
-        // Enable Thinking Toggle if needed
         const thinkingToggle = document.querySelector('mat-slide-toggle[data-test-toggle="enable-thinking"] button');
         if (thinkingToggle && thinkingToggle.getAttribute('aria-checked') === 'false') {
             thinkingToggle.click();
         }
 
-        // Logic for Gemini 2.5 Slider
         const manualToggle = document.querySelector('mat-slide-toggle[data-test-toggle="manual-budget"] button');
         if (manualToggle) {
             const isManual = manualToggle.getAttribute('aria-checked') === 'true';
@@ -271,12 +280,10 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
         }
     }
 
-    // New Logic for Gemini 3 "Thinking Level" (High/Low)
     async function setThinkingLevel(level) {
         const select = document.querySelector('mat-select[aria-label="Thinking Level"]');
         if (!select) return;
 
-        // Check current text
         const currentVal = select.querySelector('.mat-mdc-select-value-text')?.textContent?.trim();
         if (currentVal === level) {
             focusMainInput();
@@ -286,7 +293,6 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
         toggleAutomationMode(true);
         select.click();
 
-        // Wait for overlay options
         waitForElement('.cdk-overlay-pane mat-option', () => {
             const options = document.querySelectorAll('mat-option');
             for (const opt of options) {
@@ -334,6 +340,7 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
         b.className = 'as-custom-btn';
         b.onclick = (e) => {
             e.preventDefault();
+            e.stopPropagation(); // Prevent bubbling
             onClick();
         };
         return b;
@@ -370,19 +377,17 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
             target.parentNode.insertBefore(div, target.nextSibling);
         });
 
-        // 2. Thinking Level Buttons (Gemini 3)
-        // Find the header, then find the parent settings-item
+        // 2. Thinking Level Buttons (Dynamic Injection)
         const observer = new MutationObserver(() => {
             const headers = Array.from(document.querySelectorAll('h3.item-description-title'));
             const thinkingHeader = headers.find(h => h.textContent.trim() === 'Thinking level');
             
             if (thinkingHeader) {
-                // Navigate up to the settings item container
                 const container = thinkingHeader.closest('.settings-item');
                 if (container && !container.nextElementSibling?.classList.contains('thinking-level-buttons')) {
                     const div = document.createElement('div');
                     div.className = 'thinking-level-buttons as-btn-group';
-                    div.style.marginLeft = '16px'; // Align visually
+                    div.style.marginLeft = '16px'; 
                     
                     div.appendChild(createBtn('High', () => setThinkingLevel('High')));
                     div.appendChild(createBtn('Low', () => setThinkingLevel('Low')));
@@ -395,27 +400,20 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
     }
 
     function setupFocusListeners() {
-        // Global listener to catch manual interactions and refocus
         document.body.addEventListener('click', (e) => {
             const target = e.target;
-            
-            // 1. Grounding Toggle
             if (target.closest('[data-test-id="searchAsAToolTooltip"] button')) {
                 focusMainInput();
                 return;
             }
-
-            // 2. Manual Budget Toggle (Gemini 2.5)
             if (target.closest('mat-slide-toggle[data-test-toggle="manual-budget"]')) {
                 focusMainInput();
                 return;
             }
-
-            // 3. New Chat Link
             if (target.closest('a[href="/prompts/new_chat"]')) {
                 setTimeout(runMainLogic, 500);
             }
-        }, true); // Capture phase
+        }, true);
     }
 
     // ===================================================================
