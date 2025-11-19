@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         AI Studio Advanced Settings Setter (URL-Configurable)
+// @name         AI Studio Advanced Settings (Zero-Flash & Flexible Models)
 // @namespace    http://tampermonkey.net/
-// @version      6.1
-// @description  Applies advanced settings to AI Studio from URL parameters or internal defaults.
+// @version      7.0
+// @description  Applies settings silently. Supports flexible model versioning (Gemini 3 priority).
 // @author       You
 // @match        https://aistudio.google.com/prompts/*
 // @grant        none
@@ -12,79 +12,28 @@
 // @updateURL    https://raw.githubusercontent.com/bozdemir14/aistudio-userscript/refs/heads/main/ai-studio.user.js
 // ==/UserScript==
 
-
 (function() {
     'use strict';
 
-    // Exit early if we're in an iframe
-    if (window.self !== window.top) {
-        return;
-    }
-
-    let activeModel = null;
-    let desiredTemp = 0; // Will be updated by runMainLogic
+    // Exit if iframe
+    if (window.self !== window.top) return;
 
     // ===================================================================
-    // === HELPER: waitForElement
+    // === CONFIGURATION & MODEL PREFERENCES
     // ===================================================================
-    function waitForElement(selector, callback = null, timeout = 15000) {
-        if (typeof callback === 'number') {
-            timeout = callback;
-            callback = null;
-        }
-        if (!callback) {
-            return new Promise((resolve, reject) => {
-                _waitForElementImpl(selector, resolve, timeout, reject);
-            });
-        }
-        _waitForElementImpl(selector, callback, timeout);
-        return undefined;
-    }
+    
+    // Priority lists: The script tries the first one; if missing, tries the next.
+    const MODEL_PREFS = {
+        PRO:   ['gemini-3-pro', 'gemini-3-pro-latest', 'gemini-3-pro-preview', 'gemini-2.5-pro'],
+        FLASH: ['gemini-3-flash-latest', 'gemini-3-flash', 'gemini-3-flash-preview', 'gemini-flash-latest'],
+        NANO:  ['gemini-3-flash-image', 'gemini-3-flash-image-preview', 'gemini-3-flash-image-latest', 'gemini-2.5-flash-image']
+    };
 
-    function _waitForElementImpl(selector, callback, timeout = 15000, rejectCallback = null) {
-        const element = document.querySelector(selector);
-        if (element) {
-            callback(element);
-            return;
-        }
-        const observer = new MutationObserver((mutations, obs) => {
-            const element = document.querySelector(selector);
-            if (element) {
-                obs.disconnect();
-                callback(element);
-            }
-        });
-        observer.observe(document.documentElement, { childList: true, subtree: true });
-        setTimeout(() => {
-            observer.disconnect();
-            const element = document.querySelector(selector);
-            if (element) {
-                callback(element);
-            } else {
-                const errorMsg = `[Tampermonkey] Timed out waiting for element: ${selector}`;
-                console.error(errorMsg);
-                if (rejectCallback) rejectCallback(new Error(errorMsg));
-            }
-        }, timeout);
-    }
-
-    // ===================================================================
-    // === CORE LOGIC
-    // ===================================================================
-
-    async function runMainLogic() {
-        console.log("[Tampermonkey] Running main logic to apply settings.");
-
-        // Always set up the click listener for new chat detection
-        setupGlobalClickListener();
-
-const defaultSettings = {
-    model: "gemini-2.5-pro",
-    budget: -1,
-    temp: 0,
-    grounding: false,
-    // System prompt:
-    sp: `You are a concise, expert-level assistant. Provide precise, actionable answers.
+    const DEFAULT_SETTINGS = {
+        modelPrefs: MODEL_PREFS.PRO, // Default to Pro list
+        budget: -1,
+        grounding: false,
+        sp: `You are a concise, expert-level assistant. Provide precise, actionable answers.
 
 ### Interaction Rules
 - **Clarify first**: If a request is ambiguous, ask targeted questions.  
@@ -121,95 +70,219 @@ const defaultSettings = {
 
 **Core Principle:**  
 Be fast, factual, and structured. Focus on delivering maximum value with minimal noise.`
-};
+    };
+
+    // Global lock to prevent interference
+    let isBusy = false;
+
+    // ===================================================================
+    // === UTILITIES
+    // ===================================================================
+
+    function waitForElement(selector, callback, timeout = 10000) {
+        const el = document.querySelector(selector);
+        if (el) { callback(el); return; }
+        
+        const observer = new MutationObserver((mutations, obs) => {
+            const element = document.querySelector(selector);
+            if (element) { obs.disconnect(); callback(element); }
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+        setTimeout(() => { observer.disconnect(); }, timeout);
+    }
+
+    // Inject CSS to hide overlays ONLY when script is automating
+    const style = document.createElement('style');
+    style.textContent = `
+        body.script-automating .cdk-overlay-container,
+        body.script-automating .cdk-overlay-backdrop,
+        body.script-automating .cdk-overlay-pane {
+            opacity: 0 !important;
+            visibility: hidden !important;
+            pointer-events: none !important;
+            display: none !important; /* Aggressive hide */
+        }
+        /* Hide system instruction dropdown triggers permanently if desired */
+        ms-system-instructions mat-form-field { display: none !important; }
+    `;
+    document.head.appendChild(style);
+
+    function toggleAutomationMode(active) {
+        if (active) {
+            document.body.classList.add('script-automating');
+            isBusy = true;
+        } else {
+            // Small delay to ensure overlays are actually gone/closed before showing UI again
+            setTimeout(() => {
+                document.body.classList.remove('script-automating');
+                isBusy = false;
+            }, 100);
+        }
+    }
+
+    // ===================================================================
+    // === CORE LOGIC
+    // ===================================================================
+
+    async function runMainLogic() {
+        if (isBusy) return;
+        console.log("[Tampermonkey] Applying settings...");
 
         const urlParams = new URLSearchParams(window.location.search);
 
-        // Update global desired temperature from URL or defaults
-        desiredTemp = urlParams.has('temp') ? parseFloat(urlParams.get('temp')) : defaultSettings.temp;
+        // 1. Determine Model Priority List
+        let targetModelList = DEFAULT_SETTINGS.modelPrefs;
+        const urlModel = urlParams.get('model');
+        
+        // If URL has a specific model, prioritize that single model, otherwise use defaults
+        if (urlModel) targetModelList = [urlModel];
 
-        // Determine the model to use, respecting the user's last choice via activeModel
-        const modelFromUrl = urlParams.get('model');
-        const modelToSet = activeModel || modelFromUrl || defaultSettings.model;
-        activeModel = modelToSet; // Persist the choice for this session
-
+        // 2. Prepare Settings
         const settings = {
-            model: modelToSet,
-            budget: urlParams.has('budget') ? parseInt(urlParams.get('budget'), 10) : defaultSettings.budget,
-            temp: desiredTemp, // Use the globally set desiredTemp
-            grounding: urlParams.has('grounding') ? (urlParams.get('grounding').toLowerCase() === 'true' || urlParams.get('grounding') === '1') : defaultSettings.grounding,
-            sp: urlParams.has('sp') ? decodeURIComponent(urlParams.get('sp')) : defaultSettings.sp
+            modelList: targetModelList,
+            budget: urlParams.has('budget') ? parseInt(urlParams.get('budget'), 10) : DEFAULT_SETTINGS.budget,
+            grounding: urlParams.has('grounding') ? (urlParams.get('grounding') === 'true') : DEFAULT_SETTINGS.grounding,
+            sp: urlParams.has('sp') ? decodeURIComponent(urlParams.get('sp')) : DEFAULT_SETTINGS.sp
         };
 
-        await applySettings(settings);
-
-        const ytUrlParam = urlParams.get('yt_url');
-        const fmParam = urlParams.get('fm');
-        if (ytUrlParam) {
-            attachYouTubeVideo(decodeURIComponent(ytUrlParam), "Summarize this video in a nice format.");
-        } else if (fmParam) {
-            setFirstMessage(decodeURIComponent(fmParam));
-        } else {
-            // FIXED: Delay the focus call to allow the UI to settle after settings changes.
-            setTimeout(focusMainInput, 200);
+        // 3. Execute Automation
+        // We wrap everything in one "busy" block to keep the screen stable
+        toggleAutomationMode(true);
+        
+        try {
+            // Select model first (highest priority)
+            await selectBestModel(settings.modelList);
+            
+            // Apply other settings
+            setThinkingBudget(settings.budget);
+            setGrounding(settings.grounding);
+            
+            // Apply System Prompt
+            await setSystemPrompt(settings.sp);
+        } catch (e) {
+            console.error("[Tampermonkey] Automation error:", e);
+        } finally {
+            toggleAutomationMode(false);
+            
+            // Handle YT/Focus logic after UI returns
+            const ytUrlParam = urlParams.get('yt_url');
+            if (ytUrlParam) {
+                attachYouTubeVideo(decodeURIComponent(ytUrlParam), "Summarize this video.");
+            } else {
+                setTimeout(focusMainInput, 300);
+            }
         }
     }
-
-    async function applySettings(settings) {
-        await setModel(settings.model);
-        setThinkingBudget(settings.budget);
-        setTemperature(settings.temp);
-        setGrounding(settings.grounding);
-        await setSystemPrompt(settings.sp); // Now awaits this as well
-    }
-
-    // ===================================================================
-    // === EVENT HANDLING
-    // ===================================================================
-
-function setupGlobalClickListener() {
-    document.body.addEventListener('click', (event) => {
-        const target = event.target;
-
-        // Case 1: User starts a new chat.
-        // The polling mechanism will automatically detect temperature=1 and apply settings
-        if (target.closest('a[href="/prompts/new_chat"]')) {
-            console.log("[Tampermonkey] New chat button clicked, polling will handle settings.");
-            return;
-        }
-
-        // Case 2: User changes the model.
-        if (target.closest('mat-option')) {
-            // After the model dropdown closes, reset temperature and focus the input.
-            setTimeout(() => {
-                setTemperature(0);
-                focusMainInput(); // Focus the main input box.
-            }, 500);
-            return;
-        }
-
-        // Keep original convenience handlers for manual toggle interactions.
-        const button = target.closest('button');
-        if (!button) return;
-
-        if (button.matches('mat-slide-toggle[data-test-toggle="manual-budget"] button')) {
-            setTimeout(() => {
-                if (button.getAttribute('aria-checked') === 'true') {
-                    setSliderValue('[data-test-id="user-setting-budget-animation-wrapper"] input[type="range"]', 128);
-                }
-            }, 50);
-            focusMainInput();
-        }
-
-        if (button.matches('[data-test-id="searchAsAToolTooltip"] button[role="switch"]')) {
-            focusMainInput();
-        }
-    }, true);
-}
 
     // ===================================================================
     // === ACTION FUNCTIONS
     // ===================================================================
+
+    function selectBestModel(candidateList) {
+        return new Promise(resolve => {
+            const selector = document.querySelector('.model-selector-card');
+            if (!selector) { resolve(); return; }
+
+            // 1. Check if current model is already one of the candidates (Optimization)
+            const currentSubtitle = selector.querySelector('.subtitle')?.textContent?.trim();
+            if (currentSubtitle && candidateList.some(m => currentSubtitle.includes(m))) {
+                console.log(`[Tampermonkey] Already on preferred model: ${currentSubtitle}`);
+                resolve();
+                return;
+            }
+
+            // 2. Open Dropdown
+            selector.click();
+
+            // 3. Wait for list and pick best match
+            waitForElement('ms-model-carousel-row', () => {
+                let found = false;
+                
+                // Iterate through preferences in order
+                for (const modelId of candidateList) {
+                    // Exact ID match check
+                    const btn = document.querySelector(`button[id="model-carousel-row-models/${modelId}"]`);
+                    if (btn) {
+                        console.log(`[Tampermonkey] Switching to: ${modelId}`);
+                        btn.click();
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found) {
+                    console.warn("[Tampermonkey] No preferred models found in dropdown.");
+                    // Close dropdown if nothing found
+                    const backdrop = document.querySelector('.cdk-overlay-backdrop');
+                    if (backdrop) backdrop.click();
+                } else {
+                     // Ensure backdrop closes (sometimes click isn't enough to close immediately)
+                     setTimeout(() => {
+                         const backdrop = document.querySelector('.cdk-overlay-backdrop');
+                         if (backdrop) backdrop.click();
+                     }, 50);
+                }
+
+                setTimeout(resolve, 150);
+            }, 3000);
+        });
+    }
+
+    function setSystemPrompt(promptText) {
+        return new Promise(resolve => {
+            const openBtn = document.querySelector('button[data-test-system-instructions-card]');
+            if (!openBtn) { resolve(); return; }
+
+            // Check if already set
+            const hasContent = openBtn.querySelector('[class*="has-content"]');
+            if (hasContent) { resolve(); return; }
+
+            openBtn.click();
+
+            // Wait for textarea
+            waitForElement('textarea[aria-label="System instructions"]', (textArea) => {
+                textArea.value = promptText;
+                textArea.dispatchEvent(new Event('input', { bubbles: true }));
+
+                // Close via backdrop
+                setTimeout(() => {
+                    const backdrop = document.querySelector('.cdk-overlay-backdrop');
+                    if (backdrop) backdrop.click();
+                    setTimeout(resolve, 150);
+                }, 100);
+            });
+        });
+    }
+
+    function setThinkingBudget(val) {
+        // 1. Enable thinking if disabled
+        const thinkingToggle = document.querySelector('mat-slide-toggle[data-test-toggle="enable-thinking"] button');
+        if (thinkingToggle && thinkingToggle.getAttribute('aria-checked') === 'false') {
+            thinkingToggle.click();
+        }
+
+        // 2. Handle Manual vs Auto
+        const manualToggle = document.querySelector('mat-slide-toggle[data-test-toggle="manual-budget"] button');
+        if (manualToggle) {
+            const isManual = manualToggle.getAttribute('aria-checked') === 'true';
+            // If budget is -1 (Auto), ensure manual is OFF
+            if (val === -1 && isManual) manualToggle.click();
+            // If budget is >= 0, ensure manual is ON
+            else if (val >= 0 && !isManual) manualToggle.click();
+        }
+
+        // 3. Set Slider
+        if (val >= 0) {
+            setSliderValue('[data-test-id="user-setting-budget-animation-wrapper"] input[type="range"]', val);
+        }
+    }
+
+    function setGrounding(desiredState) {
+        const toggle = document.querySelector('[data-test-id="searchAsAToolTooltip"] button[role="switch"]');
+        if (toggle && (toggle.getAttribute('aria-checked') === 'true') !== desiredState) {
+            toggle.click();
+        }
+    }
 
     function setSliderValue(selector, value) {
         const slider = document.querySelector(selector);
@@ -220,391 +293,94 @@ function setupGlobalClickListener() {
         }
     }
 
-    function setModel(modelId) {
-        return new Promise(resolve => {
-            const modelSelectorTrigger = document.querySelector('.model-selector-card');
-            if (!modelSelectorTrigger) {
-                console.error("[Tampermonkey] Model selector trigger not found");
-                resolve();
-                return;
-            }
-            // Check if already selected by checking the subtitle
-            const currentModel = modelSelectorTrigger.querySelector('.subtitle')?.textContent?.trim();
-            if (currentModel === modelId) {
-                resolve();
-                return;
-            }
-            // Set flag before clicking to hide overlay immediately
-            isAutomatingModelSelection = true;
-            modelSelectorTrigger.click();
-            waitForElement('ms-model-carousel-row', () => {
-                const modelButton = document.querySelector(`button[id="model-carousel-row-models/${modelId}"]`);
-                if (modelButton) {
-                    modelButton.click();
-                } else {
-                    console.error(`[Tampermonkey] Model button for ${modelId} not found`);
-                }
-                setTimeout(() => {
-                    const backdrop = document.querySelector('.cdk-overlay-backdrop');
-                    if (backdrop) backdrop.click();
-                    // Reset flag after closing
-                    isAutomatingModelSelection = false;
-                    resolve();
-                }, 150);
-            }, 5000);
-        });
-    }
-
-    // Global functions for one-click model switching
-    window.setModelPro = () => {
-        activeModel = 'gemini-2.5-pro';
-        setModel(activeModel).then(() => setTemperature(desiredTemp));
-    };
-    window.setModelFlash = () => {
-        activeModel = 'gemini-flash-latest';
-        setModel(activeModel).then(() => setTemperature(desiredTemp));
-    };
-    window.setModelNano = () => {
-        activeModel = 'gemini-2.5-flash-image';
-        setModel(activeModel).then(() => setTemperature(desiredTemp));
-    };
-
-    function setThinkingBudget(budgetValue) {
-        const thinkingToggle = document.querySelector('mat-slide-toggle[data-test-toggle="enable-thinking"] button');
-        if (thinkingToggle && thinkingToggle.getAttribute('aria-checked') === 'false') thinkingToggle.click();
-        const manualToggle = document.querySelector('mat-slide-toggle[data-test-toggle="manual-budget"] button');
-        if (!manualToggle) return;
-        const isManual = manualToggle.getAttribute('aria-checked') === 'true';
-        if (budgetValue === -1 && isManual) {
-            manualToggle.click();
-        } else if (budgetValue >= 0 && !isManual) {
-            manualToggle.click();
-        }
-        if (budgetValue >= 0) {
-            setSliderValue('[data-test-id="user-setting-budget-animation-wrapper"] input[type="range"]', budgetValue);
-        }
-    }
-
-    function setTemperature(tempValue) {
-        setSliderValue('[data-test-id="temperatureSliderContainer"] input[type="range"]', tempValue);
-    }
-
-    function setGrounding(desiredState) {
-        const groundingToggle = document.querySelector('[data-test-id="searchAsAToolTooltip"] button[role="switch"]');
-        if (groundingToggle && (groundingToggle.getAttribute('aria-checked') === 'true') !== desiredState) {
-            groundingToggle.click();
-        }
-    }
-
-    function setSystemPrompt(promptText) {
-        return new Promise(resolve => {
-            // 1. Selector for the open button (from previous fix)
-            const openButton = document.querySelector('button[data-test-system-instructions-card]');
-            if (!openButton) {
-                console.error("[Tampermonkey] Failed to set system prompt: open button not found");
-                resolve();
-                return;
-            }
-            
-            // Check if system prompt is already set by checking if the button has content indicator
-            const hasExistingPrompt = openButton.querySelector('[class*="has-content"]') || 
-                                     openButton.textContent.includes('Edit') ||
-                                     openButton.getAttribute('aria-label')?.includes('Edit');
-            
-            if (hasExistingPrompt) {
-                console.log("[Tampermonkey] System prompt already set, skipping.");
-                resolve();
-                return;
-            }
-            
-            // Set flag BEFORE clicking to ensure observer catches it
-            isAutomatingSystemPrompt = true;
-            console.log("[Tampermonkey] Starting automated system prompt setting (hidden mode).");
-            
-            // Click to open the dialog
-            openButton.click();
-
-            // Wait for the dialog container first
-            waitForElement('.mat-mdc-dialog-container', (dialogContainer) => {
-                dialogContainer.classList.add('hide-during-automation');
-                
-                // Also hide the overlay pane if it exists
-                const overlayPane = document.querySelector('.cdk-overlay-pane');
-                if (overlayPane) {
-                    overlayPane.classList.add('hide-during-automation');
-                }
-                
-                // Also hide the backdrop if it exists
-                const backdrop = document.querySelector('.cdk-overlay-backdrop');
-                if (backdrop) {
-                    backdrop.classList.add('hide-during-automation');
-                }
-                
-                // Wait for the textarea to appear
-                waitForElement('textarea[aria-label="System instructions"]', (textArea) => {
-                    // Set the value without focusing (to avoid interfering with user typing)
-                    textArea.value = promptText;
-                    textArea.dispatchEvent(new Event('input', { bubbles: true }));
-
-                    // Close the dialog by clicking the backdrop
-                    const backdrop = document.querySelector('.cdk-overlay-backdrop');
-                    if (backdrop) {
-                        backdrop.click();
-                    } else {
-                        console.error("[Tampermonkey] Could not find the backdrop to close system instructions dialog.");
-                    }
-
-                    // Clean up: remove hiding classes and reset flag
-                    setTimeout(() => {
-                        dialogContainer.classList.remove('hide-during-automation');
-                        if (overlayPane) {
-                            overlayPane.classList.remove('hide-during-automation');
-                        }
-                        if (backdrop) {
-                            backdrop.classList.remove('hide-during-automation');
-                        }
-                        isAutomatingSystemPrompt = false;
-                        console.log("[Tampermonkey] Automated system prompt setting complete.");
-                    }, 100);
-
-                    // Give a moment for the panel to close before resolving
-                    setTimeout(resolve, 150);
-                }, 5000);
-            }, 5000);
-        });
-    }
-
-
-    function setFirstMessage(messageText) {
-        const textArea = document.querySelector('textarea[aria-label="Type something or tab to choose an example prompt"]');
-        if (!textArea) return;
-        textArea.value = messageText;
-        textArea.dispatchEvent(new Event('input', { bubbles: true }));
-        const enterEvent = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true });
-        textArea.dispatchEvent(enterEvent);
-        textArea.focus();
-    }
-
-    function attachYouTubeVideo(videoUrl, promptText, retryAttempt = 0) {
-        const textArea = document.querySelector('textarea[aria-label="Type something or tab to choose an example prompt"]');
-        if (!textArea) return;
-        textArea.focus();
-        textArea.value = '';
-        textArea.dispatchEvent(new Event('input', { bubbles: true }));
-        try {
-            const dataTransfer = new DataTransfer();
-            dataTransfer.setData('text/plain', videoUrl);
-            const pasteEvent = new ClipboardEvent('paste', { clipboardData: dataTransfer, bubbles: true, cancelable: true });
-            textArea.dispatchEvent(pasteEvent);
-        } catch (e) {
-            textArea.value = videoUrl;
-            textArea.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-        waitForElement('ms-youtube-chunk', 5000)
-            .then(element => {
-                textArea.value = promptText;
-                textArea.dispatchEvent(new Event('input', { bubbles: true }));
-                setTimeout(() => {
-                    const runButton = document.querySelector('button[aria-label="Run"][type="submit"]');
-                    if (runButton) runButton.click();
-                }, 500);
-            })
-            .catch(error => {
-                if (retryAttempt < 2) {
-                    setTimeout(() => attachYouTubeVideo(videoUrl, promptText, retryAttempt + 1), 1000);
-                } else {
-                    textArea.value = `${promptText}\n\nVideo URL: ${videoUrl}`;
-                    textArea.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-            });
-    }
-
     function focusMainInput() {
-    // The aria-label changes between a new chat and an ongoing one.
-    // This selector targets the textarea in either state.
-    const selector = 'textarea[aria-label="Type something or tab to choose an example prompt"], textarea[aria-label="Start typing a prompt"]';
-    const textArea = document.querySelector(selector);
-
-    if (textArea) {
-        textArea.focus();
-        console.log("[Tampermonkey] Main input focused.");
-    } else {
-        console.warn("[Tampermonkey] Could not find the main input textarea to focus.");
+        const el = document.querySelector('textarea[aria-label="Type something or tab to choose an example prompt"], textarea[aria-label="Start typing a prompt"]');
+        if (el) el.focus();
     }
+
+    function attachYouTubeVideo(url, prompt) {
+        // (Existing logic preserved)
+        const area = document.querySelector('textarea[aria-label="Type something or tab to choose an example prompt"]');
+        if (!area) return;
+        area.focus();
+        area.value = url;
+        area.dispatchEvent(new Event('input', { bubbles: true }));
+        
+        waitForElement('ms-youtube-chunk', () => {
+            area.value = prompt;
+            area.dispatchEvent(new Event('input', { bubbles: true }));
+            setTimeout(() => {
+                const run = document.querySelector('button[aria-label="Run"][type="submit"]');
+                if (run) run.click();
+            }, 500);
+        });
     }
 
     // ===================================================================
-    // === SCRIPT START
+    // === EVENT LISTENERS & BUTTONS
     // ===================================================================
 
-    // Hide the system instructions preset dropdown menu
-    function hideSystemInstructionsDropdown() {
-        const style = document.createElement('style');
-        style.id = 'tampermonkey-system-instructions-style';
-        style.textContent = `
-            /* Hide the system instructions preset dropdown - aggressive selector */
-            ms-system-instructions mat-form-field.mat-mdc-form-field-type-mat-select,
-            ms-system-instructions mat-form-field[class*="mat-select"],
-            ms-system-instructions .mat-mdc-form-field-type-mat-select,
-            div[class*="panel-content"] ms-system-instructions mat-form-field:first-of-type {
-                display: none !important;
-                visibility: hidden !important;
-                height: 0 !important;
-                margin: 0 !important;
-                padding: 0 !important;
-                opacity: 0 !important;
-            }
+    // Manual Model Buttons (Using Priority Logic)
+    function injectButtons() {
+        waitForElement('.settings-item.settings-model-selector', (target) => {
+            if (document.querySelector('.model-switch-buttons')) return;
             
-            /* Adjust spacing since dropdown is hidden */
-            ms-system-instructions .title-row {
-                margin-top: 0 !important;
-            }
-            
-            /* AGGRESSIVE: Hide ALL system instruction dialogs by default */
-            .cdk-overlay-pane:has([id*="mat-mdc-dialog-title"]:has(.title)),
-            .cdk-overlay-pane:has(.panel-header .title) {
-                opacity: 0 !important;
-                visibility: hidden !important;
-                pointer-events: none !important;
-                transition: none !important;
-            }
-            
-            /* Show them only when manually opened (not during automation) */
-            .cdk-overlay-pane.user-opened {
-                opacity: 1 !important;
-                visibility: visible !important;
-                pointer-events: auto !important;
-            }
-            
-            /* Hide backdrop during automation */
-            .cdk-overlay-backdrop.hide-during-automation {
-                opacity: 0 !important;
-                pointer-events: none !important;
-                visibility: hidden !important;
-                transition: none !important;
-            }
-            
-            /* Hide overlay pane during automation */
-            .cdk-overlay-pane.hide-during-automation {
-                opacity: 0 !important;
-                visibility: hidden !important;
-                pointer-events: none !important;
-                transition: none !important;
-            }
-        `;
-        document.head.appendChild(style);
-        console.log("[Tampermonkey] System instructions dropdown hidden.");
+            const div = document.createElement('div');
+            div.className = 'model-switch-buttons';
+            div.style.cssText = 'display:flex; gap:8px; margin-top:10px;';
+
+            const createBtn = (text, list) => {
+                const b = document.createElement('button');
+                b.textContent = text;
+                b.style.cssText = 'padding:6px 12px; cursor:pointer; border-radius:16px; border:1px solid #444; background:none; color:var(--mat-sys-on-surface);';
+                b.onmouseover = () => b.style.backgroundColor = 'rgba(255,255,255,0.1)';
+                b.onmouseout = () => b.style.backgroundColor = 'transparent';
+                
+                b.onclick = async () => {
+                    toggleAutomationMode(true);
+                    await selectBestModel(list);
+                    toggleAutomationMode(false);
+                };
+                return b;
+            };
+
+            div.appendChild(createBtn('Pro', MODEL_PREFS.PRO));
+            div.appendChild(createBtn('Flash', MODEL_PREFS.FLASH));
+            div.appendChild(createBtn('Nano', MODEL_PREFS.NANO));
+
+            target.parentNode.insertBefore(div, target.nextSibling);
+        });
     }
 
-    // Apply the style immediately (before DOM fully loads)
-    hideSystemInstructionsDropdown();
+    // Global Listeners
+    function setupListeners() {
+        // 1. Listen for "New Chat" clicks
+        document.body.addEventListener('click', (e) => {
+            const link = e.target.closest('a[href="/prompts/new_chat"]');
+            if (link) {
+                console.log("[Tampermonkey] New chat detected via click.");
+                // Wait briefly for navigation to start, then run logic
+                setTimeout(runMainLogic, 500);
+            }
+        });
+
+        // 2. Inject buttons on load
+        injectButtons();
+    }
+
+    // ===================================================================
+    // === INIT
+    // ===================================================================
     
-    // Watch for system instruction dialogs and hide them immediately during automation
-    let isAutomatingSystemPrompt = false;
-    let isAutomatingModelSelection = false;
-    const dialogObserver = new MutationObserver((mutations) => {
-        if (!isAutomatingSystemPrompt && !isAutomatingModelSelection) return;
-        
-        for (const mutation of mutations) {
-            for (const node of mutation.addedNodes) {
-                if (node.nodeType === 1) { // Element node
-                    // Check if this is the overlay pane for system instructions
-                    if (node.classList && node.classList.contains('cdk-overlay-pane')) {
-                        const dialogTitle = node.querySelector('[class*="panel-header"] .title');
-                        if (dialogTitle && dialogTitle.textContent.includes('System instructions')) {
-                            node.classList.add('hide-during-automation');
-                            console.log("[Tampermonkey] System instructions dialog hidden during automation.");
-                        }
-                        // Also check for model selection overlay
-                        if (isAutomatingModelSelection && node.querySelector('ms-model-carousel-row')) {
-                            node.classList.add('hide-during-automation');
-                            console.log("[Tampermonkey] Model selection overlay hidden during automation.");
-                        }
-                    }
-                    // Also hide the backdrop
-                    if (node.classList && node.classList.contains('cdk-overlay-backdrop')) {
-                        node.classList.add('hide-during-automation');
-                    }
-                }
-            }
-        }
-    });
-    
-    // Start observing immediately
-    dialogObserver.observe(document.body, { childList: true, subtree: true });
-
-    // Inject model switch buttons
-    waitForElement('.settings-item.settings-model-selector', (modelSelectorDiv) => {
-        if (document.querySelector('.model-switch-buttons')) return;
-        const buttonContainer = document.createElement('div');
-        buttonContainer.className = 'model-switch-buttons';
-        buttonContainer.style.display = 'flex';
-        buttonContainer.style.gap = '10px';
-        buttonContainer.style.marginTop = '10px';
-        const proButton = document.createElement('button');
-        proButton.textContent = 'Pro';
-        proButton.onclick = () => window.setModelPro();
-        proButton.style.padding = '5px 10px';
-        proButton.style.cursor = 'pointer';
-        const flashButton = document.createElement('button');
-        flashButton.textContent = 'Flash';
-        flashButton.onclick = () => window.setModelFlash();
-        flashButton.style.padding = '5px 10px';
-        flashButton.style.cursor = 'pointer';
-        const nanoButton = document.createElement('button');
-        nanoButton.textContent = 'Nano Banana';
-        nanoButton.onclick = () => window.setModelNano();
-        nanoButton.style.padding = '5px 10px';
-        nanoButton.style.cursor = 'pointer';
-        buttonContainer.appendChild(proButton);
-        buttonContainer.appendChild(flashButton);
-        buttonContainer.appendChild(nanoButton);
-        modelSelectorDiv.parentNode.insertBefore(buttonContainer, modelSelectorDiv.nextSibling);
-    });
-
-    window.addEventListener('error', (event) => console.error('[Tampermonkey] Uncaught error:', event.error));
-    window.addEventListener('unhandledrejection', (event) => console.error('[Tampermonkey] Unhandled promise rejection:', event.reason));
-
-    let isRunning = false;
-    let pollInterval = null;
-
-    // Polling function to check temperature every 0.5 seconds
-    function checkAndApplySettings() {
-        // Don't check if already running
-        if (isRunning) {
-            return;
-        }
-
-        const tempSlider = document.querySelector('[data-test-id="temperatureSliderContainer"] input[type="range"]');
-        
-        if (tempSlider && parseFloat(tempSlider.value) === 1) {
-            console.log("[Tampermonkey] Temperature is 1, applying settings...");
-            isRunning = true;
-            
-            runMainLogic().then(() => {
-                console.log("[Tampermonkey] Settings applied successfully.");
-                isRunning = false;
-            }).catch((error) => {
-                console.error("[Tampermonkey] Error applying settings:", error);
-                isRunning = false;
-            });
-        }
-    }
-
-    // Start polling every 500ms
-    function startPolling() {
-        if (pollInterval) {
-            clearInterval(pollInterval);
-        }
-        console.log("[Tampermonkey] Starting temperature polling...");
-        pollInterval = setInterval(checkAndApplySettings, 500);
-    }
-
-    // Initialize immediately if DOM is ready, otherwise wait
+    // Run on Load
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', startPolling);
+        document.addEventListener('DOMContentLoaded', () => {
+            setupListeners();
+            runMainLogic();
+        });
     } else {
-        startPolling();
+        setupListeners();
+        runMainLogic();
     }
 
 })();
