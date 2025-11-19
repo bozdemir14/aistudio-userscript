@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Studio Advanced Settings (Zero-Flash & Flexible Models)
 // @namespace    http://tampermonkey.net/
-// @version      7.3
+// @version      7.4
 // @description  Applies settings silently. Supports flexible model versioning (Gemini 3 priority).
 // @author       You
 // @match        https://aistudio.google.com/prompts/*
@@ -22,8 +22,9 @@
     // ===================================================================
     
     const MODEL_PREFS = {
-        PRO:   ['gemini-3-pro', 'gemini-3-pro-latest', 'gemini-3-pro-preview', 'gemini-2.5-pro', 'gemini-1.5-pro'],
-        FLASH: ['gemini-3-flash-latest', 'gemini-3-flash', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-flash-latest', 'gemini-1.5-flash'],
+        PRO:   ['gemini-3-pro', 'gemini-3-pro-latest', 'gemini-3-pro-preview', 'gemini-2.5-pro'],
+        // Updated order: 3 > Flash Latest > 2.5
+        FLASH: ['gemini-3-flash-latest', 'gemini-3-flash', 'gemini-3-flash-preview', 'gemini-flash-latest', 'gemini-2.5-flash'],
         NANO:  ['gemini-3-flash-image', 'gemini-3-flash-image-preview', 'gemini-2.5-flash-image']
     };
 
@@ -70,7 +71,9 @@
 Be fast, factual, and structured. Focus on delivering maximum value with minimal noise.`
     };
 
+    // State tracking
     let isBusy = false;
+    let lastUrl = location.href;
 
     // ===================================================================
     // === UTILITIES
@@ -116,7 +119,7 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
             setTimeout(() => {
                 document.body.classList.remove('script-automating');
                 isBusy = false;
-            }, 100);
+            }, 50);
         }
     }
 
@@ -125,12 +128,11 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
             const el = document.querySelector('textarea[aria-label="Type something or tab to choose an example prompt"], textarea[aria-label="Start typing a prompt"]');
             if (el) {
                 el.focus();
-                // Hack to move cursor to end of text
                 const val = el.value;
                 el.value = '';
                 el.value = val;
             }
-        }, 200);
+        }, 150);
     }
 
     // ===================================================================
@@ -140,6 +142,12 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
     async function runMainLogic() {
         if (isBusy) return;
         
+        // Only run main logic automatically if we are in a New Chat context
+        // or if specific params are present.
+        if (!location.href.includes('/new_chat') && !location.search.includes('model=')) {
+            return;
+        }
+
         const urlParams = new URLSearchParams(window.location.search);
         let targetModelList = DEFAULT_SETTINGS.modelPrefs;
         const urlModel = urlParams.get('model');
@@ -181,7 +189,6 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
             const selector = document.querySelector('.model-selector-card');
             if (!selector) { resolve(); return; }
 
-            // 1. Check if already selected (Partial Match on subtitle)
             const currentSubtitle = selector.querySelector('.subtitle')?.textContent?.trim();
             if (currentSubtitle && candidateList.some(m => currentSubtitle.includes(m))) {
                 resolve();
@@ -190,26 +197,21 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
 
             selector.click();
 
-            // 2. Wait for the buttons to actually exist in the DOM
-            // We wait for *any* model button to confirm render
             waitForElement('button[id*="model-carousel-row-models"]', () => {
-                
-                // CRITICAL FOR SAFARI: Give angular a moment to paint the full list
+                // 20ms buffer for Safari painting
                 setTimeout(() => {
                     let targetBtn = null;
 
-                    // Strategy A: Exact ID Match (Most robust)
+                    // Strategy A: Exact ID Match
                     for (const modelId of candidateList) {
-                        // Construct the expected ID
-                        const expectedId = `model-carousel-row-models/${modelId}`;
-                        targetBtn = document.getElementById(expectedId);
+                        targetBtn = document.getElementById(`model-carousel-row-models/${modelId}`);
                         if (targetBtn) {
                             console.log(`[Tampermonkey] Found via ID: ${modelId}`);
                             break;
                         }
                     }
 
-                    // Strategy B: Fallback text scan (If IDs change)
+                    // Strategy B: Fallback text scan
                     if (!targetBtn) {
                         const allButtons = Array.from(document.querySelectorAll('ms-model-carousel-row button'));
                         for (const modelId of candidateList) {
@@ -225,19 +227,17 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
                         targetBtn.click();
                     } else {
                         console.warn("[Tampermonkey] No model found from list:", candidateList);
-                        // Force close
                         const backdrop = document.querySelector('.cdk-overlay-backdrop');
                         if (backdrop) backdrop.click();
                     }
 
-                    // Ensure cleanup
                     setTimeout(() => {
                         const backdrop = document.querySelector('.cdk-overlay-backdrop');
                         if (backdrop) backdrop.click();
                         setTimeout(resolve, 150);
                     }, 50);
 
-                }, 200); // 200ms buffer for Safari painting
+                }, 20); 
             }, 3000);
         });
     }
@@ -323,7 +323,7 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
     }
 
     // ===================================================================
-    // === UI INJECTION
+    // === WATCHDOG & UI INJECTION (SPA SUPPORT)
     // ===================================================================
 
     function createBtn(text, onClick) {
@@ -334,25 +334,38 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
         return b;
     }
 
-    function injectButtons() {
-        waitForElement('.settings-item.settings-model-selector', (target) => {
-            if (document.querySelector('.model-switch-buttons')) return;
-            const div = document.createElement('div');
-            div.className = 'model-switch-buttons as-btn-group';
-            
-            div.appendChild(createBtn('Pro', async () => {
-                toggleAutomationMode(true); await selectBestModel(MODEL_PREFS.PRO); toggleAutomationMode(false); focusMainInput();
-            }));
-            div.appendChild(createBtn('Flash', async () => {
-                toggleAutomationMode(true); await selectBestModel(MODEL_PREFS.FLASH); toggleAutomationMode(false); focusMainInput();
-            }));
-            div.appendChild(createBtn('Nano', async () => {
-                toggleAutomationMode(true); await selectBestModel(MODEL_PREFS.NANO); toggleAutomationMode(false); focusMainInput();
-            }));
-            target.parentNode.insertBefore(div, target.nextSibling);
-        });
-
+    // Persistent Observer to handle SPA navigation and UI updates
+    function startWatchdog() {
         const observer = new MutationObserver(() => {
+            // 1. Check for URL Changes
+            if (location.href !== lastUrl) {
+                lastUrl = location.href;
+                console.log("[Tampermonkey] URL Changed, checking logic...");
+                // If we navigated to a new chat, run logic
+                if (location.href.includes('/new_chat')) {
+                    setTimeout(runMainLogic, 500);
+                }
+            }
+
+            // 2. Inject Model Buttons (Persistent)
+            const modelSelector = document.querySelector('.settings-item.settings-model-selector');
+            if (modelSelector && !modelSelector.parentNode.querySelector('.model-switch-buttons')) {
+                const div = document.createElement('div');
+                div.className = 'model-switch-buttons as-btn-group';
+                
+                div.appendChild(createBtn('Pro', async () => {
+                    toggleAutomationMode(true); await selectBestModel(MODEL_PREFS.PRO); toggleAutomationMode(false); focusMainInput();
+                }));
+                div.appendChild(createBtn('Flash', async () => {
+                    toggleAutomationMode(true); await selectBestModel(MODEL_PREFS.FLASH); toggleAutomationMode(false); focusMainInput();
+                }));
+                div.appendChild(createBtn('Nano', async () => {
+                    toggleAutomationMode(true); await selectBestModel(MODEL_PREFS.NANO); toggleAutomationMode(false); focusMainInput();
+                }));
+                modelSelector.parentNode.insertBefore(div, modelSelector.nextSibling);
+            }
+
+            // 3. Inject Thinking Buttons (Persistent)
             const headers = Array.from(document.querySelectorAll('h3.item-description-title'));
             const thinkingHeader = headers.find(h => h.textContent.trim() === 'Thinking level');
             if (thinkingHeader) {
@@ -367,24 +380,39 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
                 }
             }
         });
+
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
-    function setupFocusListeners() {
+    function setupGlobalListeners() {
         document.body.addEventListener('click', (e) => {
+            // Manual Focus handling
             if (e.target.closest('[data-test-id="searchAsAToolTooltip"] button') || 
                 e.target.closest('mat-slide-toggle[data-test-toggle="manual-budget"]')) {
                 focusMainInput();
             }
+            // Fallback for "New Chat" click if URL observer misses it
             if (e.target.closest('a[href="/prompts/new_chat"]')) {
                 setTimeout(runMainLogic, 500);
             }
         }, true);
     }
 
+    // ===================================================================
+    // === INIT
+    // ===================================================================
+    
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => { setupFocusListeners(); injectButtons(); runMainLogic(); });
+        document.addEventListener('DOMContentLoaded', () => { 
+            setupGlobalListeners(); 
+            startWatchdog();
+            // Run logic once in case we landed directly on /new_chat
+            runMainLogic();
+        });
     } else {
-        setupFocusListeners(); injectButtons(); runMainLogic();
+        setupGlobalListeners();
+        startWatchdog();
+        runMainLogic();
     }
+
 })();
