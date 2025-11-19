@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Studio Advanced Settings (Zero-Flash & Flexible Models)
 // @namespace    http://tampermonkey.net/
-// @version      7.2
+// @version      7.3
 // @description  Applies settings silently. Supports flexible model versioning (Gemini 3 priority).
 // @author       You
 // @match        https://aistudio.google.com/prompts/*
@@ -89,7 +89,6 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
 
     const style = document.createElement('style');
     style.textContent = `
-        /* Automation Hiding */
         body.script-automating .cdk-overlay-container,
         body.script-automating .cdk-overlay-backdrop,
         body.script-automating .cdk-overlay-pane {
@@ -99,16 +98,10 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
             display: none !important;
         }
         ms-system-instructions mat-form-field { display: none !important; }
-        
-        /* Button Styling */
         .as-custom-btn {
-            padding: 4px 10px; 
-            cursor: pointer; 
-            border-radius: 16px; 
-            border: 1px solid #555; 
-            background: none; 
-            color: var(--mat-sys-on-surface); 
-            font-size: 13px;
+            padding: 4px 10px; cursor: pointer; border-radius: 16px; 
+            border: 1px solid #555; background: none; 
+            color: var(--mat-sys-on-surface); font-size: 13px;
         }
         .as-custom-btn:hover { background-color: rgba(255,255,255,0.1); }
         .as-btn-group { display: flex; gap: 8px; margin-top: 8px; margin-bottom: 8px; }
@@ -132,12 +125,12 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
             const el = document.querySelector('textarea[aria-label="Type something or tab to choose an example prompt"], textarea[aria-label="Start typing a prompt"]');
             if (el) {
                 el.focus();
-                // Move cursor to end
+                // Hack to move cursor to end of text
                 const val = el.value;
                 el.value = '';
                 el.value = val;
             }
-        }, 150);
+        }, 200);
     }
 
     // ===================================================================
@@ -170,7 +163,6 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
             console.error("[Tampermonkey] Automation error:", e);
         } finally {
             toggleAutomationMode(false);
-            
             const ytUrlParam = urlParams.get('yt_url');
             if (ytUrlParam) {
                 attachYouTubeVideo(decodeURIComponent(ytUrlParam), "Summarize this video.");
@@ -189,49 +181,63 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
             const selector = document.querySelector('.model-selector-card');
             if (!selector) { resolve(); return; }
 
-            // 1. Optimization: Check if already selected
+            // 1. Check if already selected (Partial Match on subtitle)
             const currentSubtitle = selector.querySelector('.subtitle')?.textContent?.trim();
-            if (currentSubtitle && candidateList.some(m => currentSubtitle === m)) { // Exact match preferred
+            if (currentSubtitle && candidateList.some(m => currentSubtitle.includes(m))) {
                 resolve();
                 return;
             }
 
             selector.click();
 
-            waitForElement('ms-model-carousel-row', () => {
-                // 2. ROBUST FIND: Do not use ID selectors. Scan all buttons.
-                const allButtons = Array.from(document.querySelectorAll('ms-model-carousel-row button'));
-                let targetBtn = null;
-
-                // Iterate priorities
-                for (const modelId of candidateList) {
-                    // Find button where subtitle matches modelId
-                    targetBtn = allButtons.find(btn => {
-                        const sub = btn.querySelector('.model-subtitle')?.textContent?.trim();
-                        return sub === modelId;
-                    });
-                    
-                    if (targetBtn) {
-                        console.log(`[Tampermonkey] Found match: ${modelId}`);
-                        break; 
-                    }
-                }
-
-                if (targetBtn) {
-                    targetBtn.click();
-                } else {
-                    console.warn("[Tampermonkey] No preferred models found. List:", candidateList);
-                    // Force close if no match
-                    const backdrop = document.querySelector('.cdk-overlay-backdrop');
-                    if (backdrop) backdrop.click();
-                }
-
-                // Ensure closure
+            // 2. Wait for the buttons to actually exist in the DOM
+            // We wait for *any* model button to confirm render
+            waitForElement('button[id*="model-carousel-row-models"]', () => {
+                
+                // CRITICAL FOR SAFARI: Give angular a moment to paint the full list
                 setTimeout(() => {
-                    const backdrop = document.querySelector('.cdk-overlay-backdrop');
-                    if (backdrop) backdrop.click();
-                    setTimeout(resolve, 150);
-                }, 50);
+                    let targetBtn = null;
+
+                    // Strategy A: Exact ID Match (Most robust)
+                    for (const modelId of candidateList) {
+                        // Construct the expected ID
+                        const expectedId = `model-carousel-row-models/${modelId}`;
+                        targetBtn = document.getElementById(expectedId);
+                        if (targetBtn) {
+                            console.log(`[Tampermonkey] Found via ID: ${modelId}`);
+                            break;
+                        }
+                    }
+
+                    // Strategy B: Fallback text scan (If IDs change)
+                    if (!targetBtn) {
+                        const allButtons = Array.from(document.querySelectorAll('ms-model-carousel-row button'));
+                        for (const modelId of candidateList) {
+                            targetBtn = allButtons.find(b => b.textContent.includes(modelId));
+                            if (targetBtn) {
+                                console.log(`[Tampermonkey] Found via Text: ${modelId}`);
+                                break;
+                            }
+                        }
+                    }
+
+                    if (targetBtn) {
+                        targetBtn.click();
+                    } else {
+                        console.warn("[Tampermonkey] No model found from list:", candidateList);
+                        // Force close
+                        const backdrop = document.querySelector('.cdk-overlay-backdrop');
+                        if (backdrop) backdrop.click();
+                    }
+
+                    // Ensure cleanup
+                    setTimeout(() => {
+                        const backdrop = document.querySelector('.cdk-overlay-backdrop');
+                        if (backdrop) backdrop.click();
+                        setTimeout(resolve, 150);
+                    }, 50);
+
+                }, 200); // 200ms buffer for Safari painting
             }, 3000);
         });
     }
@@ -240,9 +246,7 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
         return new Promise(resolve => {
             const openBtn = document.querySelector('button[data-test-system-instructions-card]');
             if (!openBtn) { resolve(); return; }
-
-            const hasContent = openBtn.querySelector('[class*="has-content"]');
-            if (hasContent) { resolve(); return; }
+            if (openBtn.querySelector('[class*="has-content"]')) { resolve(); return; }
 
             openBtn.click();
             waitForElement('textarea[aria-label="System instructions"]', (textArea) => {
@@ -252,7 +256,7 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
                     const backdrop = document.querySelector('.cdk-overlay-backdrop');
                     if (backdrop) backdrop.click();
                     setTimeout(resolve, 150);
-                }, 100);
+                }, 150);
             });
         });
     }
@@ -262,14 +266,12 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
         if (thinkingToggle && thinkingToggle.getAttribute('aria-checked') === 'false') {
             thinkingToggle.click();
         }
-
         const manualToggle = document.querySelector('mat-slide-toggle[data-test-toggle="manual-budget"] button');
         if (manualToggle) {
             const isManual = manualToggle.getAttribute('aria-checked') === 'true';
             if (val === -1 && isManual) manualToggle.click();
             else if (val >= 0 && !isManual) manualToggle.click();
         }
-
         if (val >= 0) {
             const slider = document.querySelector('[data-test-id="user-setting-budget-animation-wrapper"] input[type="range"]');
             if (slider) {
@@ -283,23 +285,14 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
     async function setThinkingLevel(level) {
         const select = document.querySelector('mat-select[aria-label="Thinking Level"]');
         if (!select) return;
-
-        const currentVal = select.querySelector('.mat-mdc-select-value-text')?.textContent?.trim();
-        if (currentVal === level) {
-            focusMainInput();
-            return;
-        }
+        if (select.textContent.includes(level)) { focusMainInput(); return; }
 
         toggleAutomationMode(true);
         select.click();
-
         waitForElement('.cdk-overlay-pane mat-option', () => {
             const options = document.querySelectorAll('mat-option');
             for (const opt of options) {
-                if (opt.textContent.includes(level)) {
-                    opt.click();
-                    break;
-                }
+                if (opt.textContent.includes(level)) { opt.click(); break; }
             }
             toggleAutomationMode(false);
             focusMainInput();
@@ -319,7 +312,6 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
         area.focus();
         area.value = url;
         area.dispatchEvent(new Event('input', { bubbles: true }));
-        
         waitForElement('ms-youtube-chunk', () => {
             area.value = prompt;
             area.dispatchEvent(new Event('input', { bubbles: true }));
@@ -338,60 +330,39 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
         const b = document.createElement('button');
         b.textContent = text;
         b.className = 'as-custom-btn';
-        b.onclick = (e) => {
-            e.preventDefault();
-            e.stopPropagation(); // Prevent bubbling
-            onClick();
-        };
+        b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); onClick(); };
         return b;
     }
 
     function injectButtons() {
-        // 1. Model Buttons
         waitForElement('.settings-item.settings-model-selector', (target) => {
             if (document.querySelector('.model-switch-buttons')) return;
             const div = document.createElement('div');
             div.className = 'model-switch-buttons as-btn-group';
             
             div.appendChild(createBtn('Pro', async () => {
-                toggleAutomationMode(true);
-                await selectBestModel(MODEL_PREFS.PRO);
-                toggleAutomationMode(false);
-                focusMainInput();
+                toggleAutomationMode(true); await selectBestModel(MODEL_PREFS.PRO); toggleAutomationMode(false); focusMainInput();
             }));
-            
             div.appendChild(createBtn('Flash', async () => {
-                toggleAutomationMode(true);
-                await selectBestModel(MODEL_PREFS.FLASH);
-                toggleAutomationMode(false);
-                focusMainInput();
+                toggleAutomationMode(true); await selectBestModel(MODEL_PREFS.FLASH); toggleAutomationMode(false); focusMainInput();
             }));
-            
             div.appendChild(createBtn('Nano', async () => {
-                toggleAutomationMode(true);
-                await selectBestModel(MODEL_PREFS.NANO);
-                toggleAutomationMode(false);
-                focusMainInput();
+                toggleAutomationMode(true); await selectBestModel(MODEL_PREFS.NANO); toggleAutomationMode(false); focusMainInput();
             }));
-
             target.parentNode.insertBefore(div, target.nextSibling);
         });
 
-        // 2. Thinking Level Buttons (Dynamic Injection)
         const observer = new MutationObserver(() => {
             const headers = Array.from(document.querySelectorAll('h3.item-description-title'));
             const thinkingHeader = headers.find(h => h.textContent.trim() === 'Thinking level');
-            
             if (thinkingHeader) {
                 const container = thinkingHeader.closest('.settings-item');
                 if (container && !container.nextElementSibling?.classList.contains('thinking-level-buttons')) {
                     const div = document.createElement('div');
                     div.className = 'thinking-level-buttons as-btn-group';
                     div.style.marginLeft = '16px'; 
-                    
                     div.appendChild(createBtn('High', () => setThinkingLevel('High')));
                     div.appendChild(createBtn('Low', () => setThinkingLevel('Low')));
-                    
                     container.parentNode.insertBefore(div, container.nextSibling);
                 }
             }
@@ -401,35 +372,19 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
 
     function setupFocusListeners() {
         document.body.addEventListener('click', (e) => {
-            const target = e.target;
-            if (target.closest('[data-test-id="searchAsAToolTooltip"] button')) {
+            if (e.target.closest('[data-test-id="searchAsAToolTooltip"] button') || 
+                e.target.closest('mat-slide-toggle[data-test-toggle="manual-budget"]')) {
                 focusMainInput();
-                return;
             }
-            if (target.closest('mat-slide-toggle[data-test-toggle="manual-budget"]')) {
-                focusMainInput();
-                return;
-            }
-            if (target.closest('a[href="/prompts/new_chat"]')) {
+            if (e.target.closest('a[href="/prompts/new_chat"]')) {
                 setTimeout(runMainLogic, 500);
             }
         }, true);
     }
 
-    // ===================================================================
-    // === INIT
-    // ===================================================================
-    
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
-            setupFocusListeners();
-            injectButtons();
-            runMainLogic();
-        });
+        document.addEventListener('DOMContentLoaded', () => { setupFocusListeners(); injectButtons(); runMainLogic(); });
     } else {
-        setupFocusListeners();
-        injectButtons();
-        runMainLogic();
+        setupFocusListeners(); injectButtons(); runMainLogic();
     }
-
 })();
