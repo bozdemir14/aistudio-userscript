@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Studio Advanced Settings (Zero-Flash & Flexible Models)
 // @namespace    http://tampermonkey.net/
-// @version      7.4
+// @version      7.5
 // @description  Applies settings silently. Supports flexible model versioning (Gemini 3 priority).
 // @author       You
 // @match        https://aistudio.google.com/prompts/*
