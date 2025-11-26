@@ -246,18 +246,22 @@ Be fast, factual, and structured. Focus on delivering maximum value with minimal
         return new Promise(resolve => {
             const openBtn = document.querySelector('button[data-test-system-instructions-card]');
             if (!openBtn) { resolve(); return; }
-            if (openBtn.querySelector('[class*="has-content"]')) { resolve(); return; }
 
+            // The old check for content before opening the panel was brittle.
+            // A better approach is to open it, check the content, and then decide.
             openBtn.click();
             waitForElement('textarea[aria-label="System instructions"]', (textArea) => {
-                textArea.value = promptText;
-                textArea.dispatchEvent(new Event('input', { bubbles: true }));
+                if (textArea.value !== promptText) {
+                    textArea.value = promptText;
+                    textArea.dispatchEvent(new Event('input', { bubbles: true }));
+                    textArea.dispatchEvent(new Event('change', { bubbles: true }));
+                }
                 setTimeout(() => {
                     const backdrop = document.querySelector('.cdk-overlay-backdrop');
                     if (backdrop) backdrop.click();
                     setTimeout(resolve, 150);
                 }, 150);
-            });
+            }, 5000); // Wait up to 5 seconds
         });
     }
 
